@@ -1,0 +1,6 @@
+{
+  "name": "VIGOR Intelligent Analytics",
+  "description": "Excel-to-Dashboard Business Analytics System with automated data understanding, executive KPIs, interactive charts, AI insights, and natural language data queries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
