@@ -103,6 +103,171 @@ export interface Dataset {
   row_count?: number;
   column_count?: number;
   status?: ReportingStatus;
+  // Management Workbook fields
+  isManagementWorkbook?: boolean;
+  workbookReport?: NormalizedWorkbook;
+  // Dedicated Consolidated Sheet data for MVP
+  isConsolidatedWorkbook?: boolean;
+  consolidatedData?: ConsolidatedPerformanceData;
+}
+
+export type SheetRole =
+  | 'company'
+  | 'sector_summary'
+  | 'group_consolidated'
+  | 'helper'
+  | 'chart'
+  | 'unknown';
+
+export interface SheetClassification {
+  sheetName: string;
+  role: SheetRole;
+  companyId?: string;
+  companyName?: string;
+  sectorId?: string;
+  sectorName?: string;
+  isAggregate: boolean;
+  aggregationLevel: 'company' | 'sector' | 'group' | 'none';
+  includeInGroupRollup: boolean;
+  isHidden?: boolean;
+  isDuplicate?: boolean;
+  duplicateOf?: string;
+  confidence: 'high' | 'medium' | 'low';
+  cellCount?: number;
+  sectionsCount?: number;
+  metricsCount?: number;
+}
+
+export interface AnalysisSection {
+  name: string;
+  type: 'operational' | 'financial' | 'other';
+  headerRow: number;
+  startRow: number;
+  endRow: number;
+  metrics: NormalizedMetric[];
+}
+
+export interface NormalizedMetric {
+  id: string;
+  companyId: string | null;
+  companyName: string;
+  sectorId: string | null;
+  section: 'operational' | 'financial' | 'other';
+  metricName: string;
+  unit: string | null;
+  periodType: 'monthly' | 'current_period' | 'ytd';
+  period: string | null;
+  actual: number | null;
+  plan: number | null;
+  variance: number | null;
+  achievementPct: number | null;
+  priorYear: number | null;
+  growthPct: number | null;
+  // YTD fields
+  ytdActual?: number | null;
+  ytdPlan?: number | null;
+  ytdVariance?: number | null;
+  ytdAchievementPct?: number | null;
+  ytdPriorYear?: number | null;
+  ytdGrowthPct?: number | null;
+  monthlyValues?: Record<string, number | null>; // e.g. { 'Jan': 120, 'Feb': 140, ... }
+  monthlyPlanValues?: Record<string, number | null>; // e.g. { 'Jan': 110, 'Feb': 130, ... } if monthly budget exists
+  ytdMonthlyValues?: Record<string, number | null>;
+  sourceSheet: string;
+  sourceCell?: string;
+  isMTZS?: boolean;
+  hasFormulaError?: boolean;
+}
+
+export interface ConsolidatedPerformanceData {
+  filename: string;
+  sheetName: string;
+  reportingPeriod: string; // e.g. "August 2026"
+  reportingMonth: string; // e.g. "August"
+  reportingMonthNum: number; // 8 for August
+  availableMonths: string[]; // e.g. ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug']
+  hasOperationalSection: boolean;
+  hasFinancialSection: boolean;
+  financialMetrics: NormalizedMetric[];
+  operationalMetrics: NormalizedMetric[];
+  currentMonthKPIs: {
+    revenue?: NormalizedMetric;
+    grossProfit?: NormalizedMetric;
+    grossProfitPct?: NormalizedMetric;
+    opex?: NormalizedMetric;
+    ebitda?: NormalizedMetric;
+    netProfit?: NormalizedMetric;
+    netProfitPct?: NormalizedMetric;
+    debtors?: NormalizedMetric;
+    collection?: NormalizedMetric;
+  };
+  insights: {
+    type: 'positive' | 'warning' | 'neutral';
+    text: string;
+  }[];
+  dataQualityIssues: string[];
+}
+
+export interface NormalizedCompanyReport {
+  companyId: string;
+  companyName: string;
+  companyCode: string;
+  sectorId: string;
+  sectorName: string;
+  sheetName: string;
+  reportingPeriod: string;
+  sections: AnalysisSection[];
+  operationalMetrics: NormalizedMetric[];
+  financialMetrics: NormalizedMetric[];
+  monthlyTrendMetrics: NormalizedMetric[];
+  headlineKPIs: {
+    revenue?: { actual: number | null; plan: number | null; achievementPct: number | null; variance: number | null; priorYear: number | null; growthPct: number | null };
+    grossProfit?: { actual: number | null; plan: number | null; achievementPct: number | null; variance: number | null };
+    grossProfitPct?: number | null;
+    opex?: { actual: number | null; plan: number | null; achievementPct: number | null };
+    ebitda?: { actual: number | null; plan: number | null; achievementPct: number | null };
+    netProfit?: { actual: number | null; plan: number | null; achievementPct: number | null; variance: number | null };
+    netProfitPct?: number | null;
+    debtors?: number | null;
+    collection?: number | null;
+    occupancyOrVolume?: { label: string; value: number | null; unit: string | null };
+  };
+  dataQualityIssues: string[];
+}
+
+export interface NormalizedWorkbook {
+  filename: string;
+  fileSize: number;
+  reportingPeriod: string;
+  lastReportedMonth: string; // e.g. "August"
+  totalSheets: number;
+  operatingCompanyCount: number;
+  sectorSummaryCount: number;
+  consolidatedCount: number;
+  helperOrChartCount: number;
+  sheetClassifications: SheetClassification[];
+  companies: Record<string, NormalizedCompanyReport>; // key: companyId
+  sectorReports: Record<string, NormalizedCompanyReport>; // key: sectorId
+  consolidatedReport?: NormalizedCompanyReport;
+  groupSummary: {
+    totalRevenue: number;
+    totalPlanRevenue: number;
+    revenueAchievementPct: number;
+    totalGrossProfit: number;
+    totalOpex: number;
+    totalEbitda: number;
+    totalNetProfit: number;
+    totalNetProfitPlan: number;
+    netProfitAchievementPct: number;
+    totalDebtors: number;
+    companiesReporting: number;
+    companiesMissingPlan: string[];
+    companiesNegativeProfit: string[];
+    topRevenueCompany?: { name: string; value: number };
+    topProfitCompany?: { name: string; value: number };
+    highestDebtorsCompany?: { name: string; value: number };
+  };
+  dataQualityWarnings: string[];
 }
 
 export interface KPICard {

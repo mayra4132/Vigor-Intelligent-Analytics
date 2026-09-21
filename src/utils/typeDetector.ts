@@ -235,3 +235,42 @@ export function detectColumnTypeAndMeaning(
 
   return { type, meaning, canonicalMetric, confidence, confidenceReason, isCurrency, currencySymbol };
 }
+
+/**
+ * Clean and parse numeric values from spreadsheet cells
+ * Handles accounting negatives (123.45), currencies, percentages, and Excel error codes
+ */
+export function parseCleanNumber(val: any): number | null {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') {
+    return isFinite(val) && !isNaN(val) ? val : null;
+  }
+  if (typeof val !== 'string') return null;
+
+  const s = val.trim();
+  if (!s || s === '') return null;
+
+  // Excel accounting dashes often represent 0
+  if (s === '-' || s === '–' || s === '—') return 0;
+
+  // Excel formula error strings
+  if (/^#(DIV\/0!|N\/A|VALUE!|REF!|NAME\?|NUM!|NULL!)/i.test(s)) {
+    return null;
+  }
+
+  // Handle accounting format: (1,234.56) -> -1234.56
+  let cleanStr = s;
+  let isNegative = false;
+  if (cleanStr.startsWith('(') && cleanStr.endsWith(')')) {
+    isNegative = true;
+    cleanStr = cleanStr.slice(1, -1);
+  }
+
+  // Remove currency symbols, commas, and percentage signs
+  cleanStr = cleanStr.replace(/[\$,\s€£%]/g, '').replace(/\b(tzs|tsh|usd|eur|gbp)\b/gi, '').trim();
+
+  const num = Number(cleanStr);
+  if (isNaN(num)) return null;
+
+  return isNegative ? -num : num;
+}

@@ -146,6 +146,14 @@ export default function App() {
       ? datasets.find(d => d.id === datasetId) 
       : datasets.find(d => d.company_id === companyId);
 
+    // If not found as standalone dataset, check if an uploaded management workbook contains this company
+    if (!targetDataset) {
+      const mgmtWorkbook = datasets.find(d => d.isManagementWorkbook && d.workbookReport?.companies?.[companyId]);
+      if (mgmtWorkbook) {
+        targetDataset = mgmtWorkbook;
+      }
+    }
+
     if (targetDataset) {
       setActiveDataset(targetDataset);
       try {
@@ -209,8 +217,13 @@ export default function App() {
       return [newDataset, ...filtered];
     });
 
-    // Step 3 in wizard: "Check Your Data"
-    setCurrentView('understanding');
+    // If it's a consolidated workbook or executive management workbook, proceed directly to dashboard overview!
+    if (newDataset.isConsolidatedWorkbook || newDataset.isManagementWorkbook) {
+      setCurrentView('overview');
+    } else {
+      // Step 3 in wizard: "Check Your Data"
+      setCurrentView('understanding');
+    }
   };
 
   const handleConfirmMapping = (updatedDataset: Dataset) => {
@@ -329,11 +342,15 @@ export default function App() {
             ) : activeDataset ? (
               <DashboardPage
                 dataset={activeDataset}
+                activeCompanyId={activeCompanyId}
+                onSelectCompany={handleSelectCompany}
                 onNavigateToAskAI={handleNavigateToAskAI}
                 onNavigateToExplore={() => setCurrentView('explore')}
                 onNavigateToReport={() => setCurrentView('report')}
                 onNavigateToUnderstanding={() => setCurrentView('understanding')}
                 onNavigateToGroup={handleGoToGroupOverview}
+                onNavigateToUpload={handleNavigateToUpload}
+                onOpenCompanyModal={() => setIsCompanyModalOpen(true)}
               />
             ) : datasets.length > 0 ? (
               <GroupOverviewPage

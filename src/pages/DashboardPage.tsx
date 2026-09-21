@@ -27,24 +27,91 @@ import { Dataset, FilterState } from '../types';
 import { analyzeSheet, filterRows } from '../services/analyticsEngine';
 import { KPICardView } from '../components/KPICardView';
 import { ChartWidget } from '../components/ChartWidget';
+import { GroupExecutiveDashboard } from '../components/GroupExecutiveDashboard';
+import { CompanyExecutiveDashboard } from '../components/CompanyExecutiveDashboard';
+import { ConsolidatedManagementDashboard } from '../components/ConsolidatedManagementDashboard';
+import { CompanyEmptyState } from '../components/CompanyEmptyState';
+import { COMPANY_BY_ID } from '../data/groupStructure';
 
 interface DashboardPageProps {
   dataset: Dataset;
+  activeCompanyId?: string;
+  onSelectCompany?: (companyId: string) => void;
   onNavigateToAskAI: (initialQuestion?: string) => void;
   onNavigateToExplore: () => void;
   onNavigateToReport: () => void;
   onNavigateToUnderstanding?: () => void;
   onNavigateToGroup?: () => void;
+  onNavigateToUpload?: (companyId?: string) => void;
+  onOpenCompanyModal?: () => void;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
   dataset,
+  activeCompanyId,
+  onSelectCompany,
   onNavigateToAskAI,
   onNavigateToExplore,
   onNavigateToReport,
   onNavigateToUnderstanding,
-  onNavigateToGroup
+  onNavigateToGroup,
+  onNavigateToUpload,
+  onOpenCompanyModal
 }) => {
+  // If this is a dedicated Consolidated Workbook (MVP Priority)
+  if (dataset.isConsolidatedWorkbook && dataset.consolidatedData) {
+    return (
+      <ConsolidatedManagementDashboard
+        dataset={dataset}
+        consolidatedData={dataset.consolidatedData}
+        onNavigateToAskAI={onNavigateToAskAI}
+        onNavigateToUpload={onNavigateToUpload}
+      />
+    );
+  }
+
+  // If this is an executive management multi-sheet workbook:
+  if (dataset.isManagementWorkbook && dataset.workbookReport) {
+    const wb = dataset.workbookReport;
+
+    // If company is group or not specified, show Group Executive Dashboard
+    if (!activeCompanyId || activeCompanyId === 'vigor-group' || activeCompanyId === 'group') {
+      return (
+        <GroupExecutiveDashboard
+          workbook={wb}
+          dataset={dataset}
+          onSelectCompany={onSelectCompany || (() => {})}
+          onNavigateToAskAI={onNavigateToAskAI}
+        />
+      );
+    }
+
+    // If company exists in workbook report:
+    const companyReport = wb.companies[activeCompanyId];
+    if (companyReport) {
+      return (
+        <CompanyExecutiveDashboard
+          companyReport={companyReport}
+          dataset={dataset}
+          onNavigateToAskAI={onNavigateToAskAI}
+          onNavigateToExplore={onNavigateToExplore}
+        />
+      );
+    }
+
+    // Company not in this workbook: show clear empty state
+    const compMeta = COMPANY_BY_ID[activeCompanyId];
+    if (compMeta) {
+      return (
+        <CompanyEmptyState
+          company={compMeta}
+          onNavigateToUpload={() => onNavigateToUpload?.(activeCompanyId)}
+          onOpenCompanyModal={() => onOpenCompanyModal?.()}
+        />
+      );
+    }
+  }
+
   const activeSheet = dataset.sheets.find(s => s.name === dataset.selectedSheet) || dataset.sheets[0];
   const [filters] = useState<FilterState>({});
 

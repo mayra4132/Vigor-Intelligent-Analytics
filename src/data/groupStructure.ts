@@ -3,10 +3,13 @@
  * "One Group. Multiple Businesses. One Intelligence Platform."
  */
 
+import { SheetClassification, SheetRole } from '../types';
+
 export interface CompanyConfig {
   id: string;
   name: string;
   code: string;
+  aliases?: string[];
   sectorId: string;
   sectorName: string;
   description: string;
@@ -21,6 +24,7 @@ export interface SectorConfig {
   id: string;
   name: string;
   code: string;
+  aliases?: string[];
   description: string;
   iconName: string;
   companies: CompanyConfig[];
@@ -30,8 +34,9 @@ export interface SectorConfig {
 export const VIGOR_SECTORS: SectorConfig[] = [
   {
     id: 'manufacturing',
-    name: 'Manufacturing',
+    name: 'Manufacturing & Energy',
     code: 'MFG',
+    aliases: ['ENERGY AND CEMENT WORKS', 'MANUFACTURING', 'ENERGY & CEMENT', 'CEMENT WORKS'],
     description: 'Cement, building materials, packaging, bottling, and energy terminals.',
     iconName: 'Factory',
     primaryMetrics: ['Production Target', 'Actual Output', 'Achievement %', 'Downtime', 'Production Cost', 'Revenue'],
@@ -40,8 +45,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'vigor-cement',
         name: 'Vigor Cement Works',
         code: 'VCW',
+        aliases: ['VCN', 'VCN (2)', 'TP VCW', 'TP-VCW', 'VCW', 'VIGOR CEMENT'],
         sectorId: 'manufacturing',
-        sectorName: 'Manufacturing',
+        sectorName: 'Manufacturing & Energy',
         description: 'Portland cement and clinker manufacturing plant.',
         defaultCurrency: 'TZS',
         location: 'Tanga / Dar es Salaam',
@@ -53,8 +59,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'kisarawe-cement',
         name: 'Kisarawe Cement Company',
         code: 'KCC',
+        aliases: ['KCC', 'KISARAWE CEMENT', 'KISARAWE'],
         sectorId: 'manufacturing',
-        sectorName: 'Manufacturing',
+        sectorName: 'Manufacturing & Energy',
         description: 'Specialised regional cement and aggregate producer.',
         defaultCurrency: 'TZS',
         location: 'Coast Region',
@@ -64,8 +71,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'turkys-mifuko',
         name: "Turky's Mifuko",
         code: 'TMF',
+        aliases: ['TMC', 'TMF', "TURKY'S MIFUKO", 'TURKYS MIFUKO', 'MIFUKO'],
         sectorId: 'manufacturing',
-        sectorName: 'Manufacturing',
+        sectorName: 'Manufacturing & Energy',
         description: 'Industrial woven polypropylene bag manufacturing for cement and agriculture.',
         defaultCurrency: 'TZS',
         location: 'Zanzibar',
@@ -77,8 +85,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'zainab-bottlers',
         name: 'Zainab Bottlers Company',
         code: 'ZBC',
+        aliases: ['ZBCL', 'ZBC', 'ZAINAB BOTTLERS', 'ZAINAB'],
         sectorId: 'manufacturing',
-        sectorName: 'Manufacturing',
+        sectorName: 'Manufacturing & Energy',
         description: 'Purified drinking water and beverage bottling plant.',
         defaultCurrency: 'TZS',
         location: 'Zanzibar / Dar es Salaam',
@@ -88,8 +97,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'v-gas-lpg',
         name: 'V-Gas & LPG Terminal',
         code: 'VGAS',
+        aliases: ['VGAS', 'V GAS', 'V-GAS', 'LPG TERMINAL'],
         sectorId: 'manufacturing',
-        sectorName: 'Manufacturing',
+        sectorName: 'Manufacturing & Energy',
         description: 'Liquefied petroleum gas storage, bulk cylinder distribution, and port terminal.',
         defaultCurrency: 'TZS',
         location: 'Dar es Salaam Port',
@@ -101,14 +111,16 @@ export const VIGOR_SECTORS: SectorConfig[] = [
     id: 'hospitality',
     name: 'Hospitality',
     code: 'HOSP',
+    aliases: ['HOSPITALITY', 'HOTELS', 'TOURISM'],
     description: 'Luxury business and heritage boutique hotels in urban and coastal destinations.',
     iconName: 'Hotel',
     primaryMetrics: ['Occupancy Rate', 'Rooms Sold', 'ADR', 'RevPAR', 'Room Revenue', 'F&B Revenue'],
     companies: [
       {
         id: 'golden-tulip-city',
-        name: 'Golden Tulip Dar es Salaam City Center',
-        code: 'GTD',
+        name: 'Golden Tulip Dar es Salaam City Plaza',
+        code: 'GTCP',
+        aliases: ['GTCP', 'GT CP', 'GTD', 'GOLDEN TULIP CITY', 'GOLDEN TULIP CITY PLAZA', 'CITY PLAZA'],
         sectorId: 'hospitality',
         sectorName: 'Hospitality',
         description: 'High-rise 4-star executive business hotel in downtown Dar es Salaam.',
@@ -121,12 +133,25 @@ export const VIGOR_SECTORS: SectorConfig[] = [
       {
         id: 'golden-tulip-stonetown',
         name: 'Golden Tulip Stonetown Boutique',
-        code: 'GTS',
+        code: 'GTSTB',
+        aliases: ['GTSTB', 'GT STB', 'GTS', 'GOLDEN TULIP STONETOWN', 'STONETOWN BOUTIQUE'],
         sectorId: 'hospitality',
         sectorName: 'Hospitality',
         description: 'UNESCO World Heritage boutique hotel with rooftop ocean dining.',
         defaultCurrency: 'TZS',
         location: 'Stone Town, Zanzibar',
+        reportingStatus: 'no_data'
+      },
+      {
+        id: 'thl-mkunazini',
+        name: 'THL Mkunazini',
+        code: 'THLM',
+        aliases: ['THL MKUNAZINI', 'THLM', 'MKUNAZINI', 'THL'],
+        sectorId: 'hospitality',
+        sectorName: 'Hospitality',
+        description: 'Historic hospitality and guest lodge property in central Mkunazini.',
+        defaultCurrency: 'TZS',
+        location: 'Mkunazini, Zanzibar',
         reportingStatus: 'no_data'
       }
     ]
@@ -135,6 +160,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
     id: 'healthcare',
     name: 'Healthcare',
     code: 'HLTH',
+    aliases: ['HEALTHCARE', 'HOSPITALS', 'HEALTH'],
     description: 'Multi-specialty hospitals and executive outpatient diagnostic facilities.',
     iconName: 'Activity',
     primaryMetrics: ['Patients Served', 'Admissions', 'Average Waiting Time', 'Bed Occupancy', 'Revenue', 'Operating Cost'],
@@ -143,6 +169,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'ampola-regency',
         name: 'Ampola Regency Hospital',
         code: 'ARH',
+        aliases: ['ARH', 'AMPOLA REGENCY', 'REGENCY HOSPITAL', 'REGENCY'],
         sectorId: 'healthcare',
         sectorName: 'Healthcare',
         description: 'Full-service tertiary care general hospital and surgical centre.',
@@ -156,6 +183,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'ampola-tasakhtaa',
         name: 'Ampola Tasakhtaa Hospital',
         code: 'ATH',
+        aliases: ['ATH', 'AMPOLA TASAKHTAA', 'TASAKHTAA HOSPITAL', 'TASAKHTAA'],
         sectorId: 'healthcare',
         sectorName: 'Healthcare',
         description: 'Advanced specialty hospital and cardiac diagnostic clinic.',
@@ -169,6 +197,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
     id: 'real_estate',
     name: 'Real Estate',
     code: 'PROP',
+    aliases: ['REAL ESTATE', 'PROPERTY'],
     description: 'Commercial towers, residential gated communities, and waterfront developments.',
     iconName: 'Building',
     primaryMetrics: ['Total Units', 'Units Sold', 'Collections', 'Outstanding Receivables', 'Completion %'],
@@ -177,6 +206,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'turkys-real-estate',
         name: "Turky's Real Estate",
         code: 'TRE',
+        aliases: ['TRE', "TURKY'S REAL ESTATE", 'TURKYS REAL ESTATE', 'REAL ESTATE'],
         sectorId: 'real_estate',
         sectorName: 'Real Estate',
         description: 'Commercial office complexes, warehouse logistics parks, and urban retail malls.',
@@ -188,6 +218,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'the-waterfront',
         name: 'The Waterfront Residence',
         code: 'WFR',
+        aliases: ['WFR', 'THE WATERFRONT', 'WATERFRONT'],
         sectorId: 'real_estate',
         sectorName: 'Real Estate',
         description: 'Exclusive seaside luxury condominiums and private marina residences.',
@@ -199,8 +230,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
   },
   {
     id: 'transportation',
-    name: 'Transportation',
+    name: 'Transportation & Logistics',
     code: 'LOG',
+    aliases: ['TRANSPORTATION', 'LOGISTICS', 'SHIPPING'],
     description: 'High-speed marine passenger catamarans and coastal cargo services.',
     iconName: 'Ship',
     primaryMetrics: ['Total Passengers', 'Trips Completed', 'Capacity Utilisation', 'Fuel Cost', 'Passenger Revenue'],
@@ -209,8 +241,9 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'zan-fast-ferries',
         name: 'Zan Fast Ferries',
         code: 'ZFF',
+        aliases: ['ZFF', 'E SQUIRE SHIPPING', 'ESQUIRE SHIPPING', 'E SQUIRE', 'ZAN FAST FERRIES', 'ZAN FERRIES'],
         sectorId: 'transportation',
-        sectorName: 'Transportation',
+        sectorName: 'Transportation & Logistics',
         description: 'Modern high-speed passenger catamaran fleet linking Dar es Salaam, Zanzibar, and Pemba.',
         defaultCurrency: 'TZS',
         location: 'Dar es Salaam & Zanzibar Ports',
@@ -224,6 +257,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
     id: 'services',
     name: 'Services',
     code: 'SERV',
+    aliases: ['SERVICES'],
     description: 'Motor vehicle compliance testing, fleet fueling, commercial facility sanitation, and risk insurance.',
     iconName: 'ShieldCheck',
     primaryMetrics: ['Jobs Completed', 'Customers Served', 'Average Turnaround', 'Service Revenue', 'Margin %'],
@@ -232,6 +266,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'kwasilva-inspection',
         name: 'KwaSilva Vehicle Inspection',
         code: 'KSV',
+        aliases: ['KWASILVA', 'KWA SILVA', 'KSV', 'KWASILVA INSPECTION'],
         sectorId: 'services',
         sectorName: 'Services',
         description: 'Automated vehicle roadworthiness testing and emissions compliance centre.',
@@ -243,6 +278,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'v-diesel',
         name: 'V-Diesel',
         code: 'VDSL',
+        aliases: ['V DIESEL', 'V-DIESEL', 'VDSL'],
         sectorId: 'services',
         sectorName: 'Services',
         description: 'Commercial fleet bulk fueling and industrial diesel depot operations.',
@@ -254,6 +290,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'v-clean',
         name: 'V Clean',
         code: 'VCLN',
+        aliases: ['V CLEAN', 'V-CLEAN', 'VCLN'],
         sectorId: 'services',
         sectorName: 'Services',
         description: 'Corporate commercial cleaning, industrial hygiene, and waste management services.',
@@ -265,6 +302,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'ampola-insurance',
         name: 'Ampola Insurance Agency',
         code: 'AIA',
+        aliases: ['AMPOLA INSURANCE', 'AMPOLA INSURANCE AGENCY', 'AIA', 'AMPOLA INS'],
         sectorId: 'services',
         sectorName: 'Services',
         description: 'Corporate underwriting, asset protection, marine cargo, and healthcare insurance brokerage.',
@@ -278,6 +316,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
     id: 'trading',
     name: 'Trading',
     code: 'TRD',
+    aliases: ['TRADING', 'COMMERCE'],
     description: 'Import, bulk distribution, and wholesale merchandising of consumer and industrial goods.',
     iconName: 'ShoppingCart',
     primaryMetrics: ['Sales Revenue', 'Cost of Goods', 'Gross Margin', 'Units Sold', 'Inventory Stock Value'],
@@ -286,6 +325,7 @@ export const VIGOR_SECTORS: SectorConfig[] = [
         id: 'zenj-merchandise',
         name: 'Zenj General Merchandise',
         code: 'ZGM',
+        aliases: ['ZGMCL', 'ZGM', 'ZENJ', 'ZENJ GENERAL MERCHANDISE', 'ZENJ MERCHANDISE', 'ZENJ TRADING'],
         sectorId: 'trading',
         sectorName: 'Trading',
         description: 'Wholesale distributor of FMCG essentials, foodstuffs, and general merchandise across East Africa.',
@@ -307,9 +347,23 @@ export const SECTOR_BY_ID: Record<string, SectorConfig> = Object.fromEntries(
   VIGOR_SECTORS.map(s => [s.id, s])
 );
 
-export const COMPANY_BY_ID: Record<string, CompanyConfig> = Object.fromEntries(
-  ALL_VIGOR_COMPANIES.map(c => [c.id, c])
-);
+export const VIGOR_GROUP_COMPANY: CompanyConfig = {
+  id: 'vigor-group',
+  name: 'VIGOR Group Consolidated',
+  code: 'VGR',
+  sectorId: 'general',
+  sectorName: 'Executive Group Operations',
+  description: 'VIGOR Group consolidated performance across all operating companies and sectors.',
+  defaultCurrency: 'TZS',
+  location: 'Group Headquarters',
+  reportingStatus: 'current',
+  lastReportingPeriod: 'August 2026'
+};
+
+export const COMPANY_BY_ID: Record<string, CompanyConfig> = {
+  ...Object.fromEntries(ALL_VIGOR_COMPANIES.map(c => [c.id, c])),
+  'vigor-group': VIGOR_GROUP_COMPANY
+};
 
 // General fallback configuration
 export const GENERAL_SECTOR: SectorConfig = {
@@ -345,3 +399,146 @@ export function getCompany(companyId?: string): CompanyConfig | undefined {
   if (companyId === 'general-company') return GENERAL_SECTOR.companies[0];
   return COMPANY_BY_ID[companyId];
 }
+
+/**
+ * Robust Central Sheet Classifier
+ * Maps any sheet name from a management workbook to its role, company, sector, and rollup flags.
+ */
+export function classifySheetName(sheetName: string, isHiddenSheet: boolean = false): SheetClassification {
+  const cleanName = sheetName.trim();
+  const upper = cleanName.toUpperCase();
+
+  // 1. Chart sheets (e.g. Chart1)
+  if (upper.startsWith('CHART') || upper.includes('GRAPH')) {
+    return {
+      sheetName,
+      role: 'chart',
+      isAggregate: false,
+      aggregationLevel: 'none',
+      includeInGroupRollup: false,
+      isHidden: isHiddenSheet,
+      confidence: 'high'
+    };
+  }
+
+  // 2. Helper / Validation / Audit sheets (e.g. FORMULA CHECK, Sheet2, Test)
+  if (
+    upper === 'FORMULA CHECK' ||
+    upper === 'FORMULACHECK' ||
+    upper === 'CHECK' ||
+    upper === 'AUDIT' ||
+    upper.startsWith('SHEET') ||
+    upper === 'README' ||
+    upper === 'INSTRUCTIONS'
+  ) {
+    return {
+      sheetName,
+      role: 'helper',
+      isAggregate: false,
+      aggregationLevel: 'none',
+      includeInGroupRollup: false,
+      isHidden: isHiddenSheet,
+      confidence: 'high'
+    };
+  }
+
+  // 3. Consolidated / Group level sheets
+  if (
+    upper === 'CONSOLIDATED' ||
+    upper === 'GROUP CONSOLIDATED' ||
+    upper === 'VIGOR GROUP' ||
+    upper === 'CONSOLIDATION' ||
+    upper === 'TOTAL GROUP'
+  ) {
+    return {
+      sheetName,
+      role: 'group_consolidated',
+      companyId: 'vigor-group',
+      companyName: 'VIGOR Group Consolidated',
+      sectorId: 'general',
+      sectorName: 'Group Level',
+      isAggregate: true,
+      aggregationLevel: 'group',
+      includeInGroupRollup: false, // CRITICAL: do NOT sum with companies! Used as reference/fallback
+      isHidden: isHiddenSheet,
+      confidence: 'high'
+    };
+  }
+
+  // 4. Sector Summary sheets
+  for (const sector of VIGOR_SECTORS) {
+    const isSectorMatch =
+      upper === sector.name.toUpperCase() ||
+      upper === sector.code.toUpperCase() ||
+      sector.aliases?.some(alias => upper === alias.toUpperCase());
+
+    if (isSectorMatch) {
+      return {
+        sheetName,
+        role: 'sector_summary',
+        sectorId: sector.id,
+        sectorName: sector.name,
+        isAggregate: true,
+        aggregationLevel: 'sector',
+        includeInGroupRollup: false, // CRITICAL: do NOT double count with individual company sheets!
+        isHidden: isHiddenSheet,
+        confidence: 'high'
+      };
+    }
+  }
+
+  // 5. Duplicate detection (e.g. "VCN (2)" vs "VCN")
+  const duplicateMatch = cleanName.match(/^(.+?)\s*\(\s*(\d+)\s*\)$/i);
+  let baseSheetName = cleanName;
+  let isDuplicate = false;
+  let duplicateOf: string | undefined = undefined;
+
+  if (duplicateMatch) {
+    baseSheetName = duplicateMatch[1].trim();
+    isDuplicate = true;
+    duplicateOf = baseSheetName;
+  }
+
+  const baseUpper = baseSheetName.toUpperCase();
+
+  // 6. Match Operating Companies
+  for (const company of ALL_VIGOR_COMPANIES) {
+    const isMatch =
+      baseUpper === company.code.toUpperCase() ||
+      baseUpper === company.name.toUpperCase() ||
+      company.aliases?.some(alias => {
+        const aliasUpper = alias.toUpperCase();
+        return baseUpper === aliasUpper || baseUpper.includes(aliasUpper) || aliasUpper.includes(baseUpper);
+      });
+
+    if (isMatch) {
+      return {
+        sheetName,
+        role: 'company',
+        companyId: company.id,
+        companyName: company.name,
+        sectorId: company.sectorId,
+        sectorName: company.sectorName,
+        isAggregate: false,
+        aggregationLevel: 'company',
+        includeInGroupRollup: !isDuplicate, // Exclude duplicates from rollup
+        isDuplicate,
+        duplicateOf,
+        isHidden: isHiddenSheet,
+        confidence: 'high'
+      };
+    }
+  }
+
+  // 7. Unknown sheet fallback
+  return {
+    sheetName,
+    role: 'unknown',
+    isAggregate: false,
+    aggregationLevel: 'company',
+    includeInGroupRollup: false,
+    isHidden: isHiddenSheet,
+    confidence: 'low'
+  };
+}
+

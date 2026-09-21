@@ -7,11 +7,15 @@ import * as XLSX from 'xlsx';
 import { SheetData, ColumnMetadata, Dataset } from '../types';
 import { detectColumnTypeAndMeaning, cleanHeaderName } from './typeDetector';
 import { COMPANY_BY_ID, SECTOR_BY_ID, GENERAL_SECTOR } from '../data/groupStructure';
+import { isManagementWorkbook, parseManagementWorkbook } from './workbookParser';
+import { findConsolidatedSheetName, parseConsolidatedWorksheet } from './consolidatedParser';
 
 export interface ParseOptions {
   sectorId?: string;
   companyId?: string;
   reportingPeriod?: string;
+  targetSheetName?: string;
+  preferConsolidated?: boolean;
   onProgress?: (percent: number, status: string) => void;
 }
 
@@ -21,6 +25,8 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
   const sectorId = options?.sectorId;
   const companyId = options?.companyId;
   const reportingPeriod = options?.reportingPeriod || 'Current Period';
+
+  console.log('[UPLOAD] File selected:', filename);
 
   // 1. Validate file extension
   const lowerName = filename.toLowerCase();
@@ -33,26 +39,31 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
     throw new Error(`Unsupported file type '${ext}'. Please upload a valid Excel (.xlsx, .xls) or CSV (.csv) workbook.`);
   }
 
-  // 2. Validate non-empty file
+  // 2. Validate non-empty file and reasonable size limit (up to 30MB)
   if (fileSize === 0) {
     throw new Error(`The selected file "${filename}" is empty (0 bytes). Please upload a valid spreadsheet containing data.`);
   }
 
-  // 3. Read ArrayBuffer from File object
+  if (fileSize > 30 * 1024 * 1024) {
+    throw new Error(`The file size (${(fileSize / (1024 * 1024)).toFixed(1)} MB) exceeds the maximum allowed limit of 30 MB.`);
+  }
+
+  // 3. Read ArrayBuffer from File object (client-side in-browser, no network request)
   let arrayBuffer: ArrayBuffer;
   try {
+    options?.onProgress?.(10, `Reading file (${(fileSize / (1024 * 1024)).toFixed(1)} MB)...`);
     arrayBuffer = await file.arrayBuffer();
-    console.log('[XLSX] ArrayBuffer loaded:', arrayBuffer.byteLength, 'bytes');
+    console.log('[UPLOAD] ArrayBuffer loaded:', arrayBuffer.byteLength, 'bytes');
   } catch (readErr: any) {
-    console.error('[UPLOAD ERROR] Error reading file as ArrayBuffer:', readErr);
+    console.error('[CONSOLIDATED ERROR] Error reading file as ArrayBuffer:', readErr);
     throw new Error(`Could not read file: ${readErr?.message || 'Access error'}.`);
   }
 
-  // 4. Parse workbook with SheetJS
+  // 4. Parse workbook with SheetJS (using pre-evaluated cell values)
   let workbook: XLSX.WorkBook;
   try {
+    options?.onProgress?.(25, 'Parsing workbook structure...');
     if (isCSV) {
-      // Decode CSV string directly to prevent character encoding issues
       const textDecoder = new TextDecoder('utf-8');
       const csvText = textDecoder.decode(arrayBuffer);
       workbook = XLSX.read(csvText, {
@@ -62,21 +73,286 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
     } else {
       workbook = XLSX.read(arrayBuffer, {
         type: 'array',
-        cellDates: true
+        cellDates: true,
+        cellFormula: false // use pre-evaluated results for maximum speed
       });
     }
     console.log('[XLSX] Workbook parsed');
   } catch (parseErr: any) {
-    console.error('[UPLOAD ERROR] SheetJS parse error:', parseErr);
+    console.error('[CONSOLIDATED ERROR] SheetJS parse error:', parseErr);
     throw new Error(`Could not parse workbook: ${parseErr?.message || 'The file may be corrupted or password protected.'}`);
   }
 
   // 5. Verify worksheets exist
   if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    console.error('[CONSOLIDATED ERROR] Workbook contains no worksheets');
     throw new Error('Workbook contains no worksheets.');
   }
-  console.log('[XLSX] Sheets detected:', workbook.SheetNames);
+  console.log('[XLSX] Sheet count detected:', workbook.SheetNames.length);
 
+  // 6. PRIORITY MVP ROUTE: Check for CONSOLIDATED sheet
+  // If user selected Group Consolidated (default) or the workbook contains a CONSOLIDATED sheet,
+  // process ONLY the CONSOLIDATED worksheet for instantaneous speed and exact accuracy.
+  const targetSheet = options?.targetSheetName;
+  const detectedConsolidatedName = findConsolidatedSheetName(workbook.SheetNames);
+  const consolidatedSheetName = targetSheet || detectedConsolidatedName;
+
+  if (consolidatedSheetName && workbook.Sheets[consolidatedSheetName]) {
+    console.log('[XLSX] CONSOLIDATED found:', consolidatedSheetName);
+    options?.onProgress?.(50, `Analyzing ${consolidatedSheetName} worksheet...`);
+
+    try {
+      const consWs = workbook.Sheets[consolidatedSheetName];
+      const consData = parseConsolidatedWorksheet(consWs, consolidatedSheetName, filename);
+      console.log('[CONSOLIDATED] Reporting month detected:', consData.reportingPeriod);
+
+      // Build SheetData rows and columns for table views and export
+      const allMetrics = [...consData.operationalMetrics, ...consData.financialMetrics];
+      const rows: Record<string, any>[] = allMetrics.map((m) => {
+        const rowObj: Record<string, any> = {
+          Metric: m.metricName,
+          Section: m.section === 'operational' ? 'Operational' : 'Financial',
+          Unit: m.unit || '',
+          Actual: m.actual,
+          Plan: m.plan,
+          Variance: m.variance,
+          'Achievement %': m.achievementPct !== null ? Number(m.achievementPct.toFixed(1)) : null,
+          SPLY: m.priorYear,
+          'Growth %': m.growthPct !== null ? Number(m.growthPct.toFixed(1)) : null,
+          'Actual YTD': m.ytdActual,
+          'Plan YTD': m.ytdPlan,
+          'YTD Variance': m.ytdVariance,
+          'YTD Achievement %': m.ytdAchievementPct !== null ? Number(m.ytdAchievementPct.toFixed(1)) : null,
+          'YTD Growth %': m.ytdGrowthPct !== null ? Number(m.ytdGrowthPct.toFixed(1)) : null
+        };
+        if (m.monthlyValues) {
+          for (const [mName, mVal] of Object.entries(m.monthlyValues)) {
+            rowObj[mName] = mVal;
+          }
+        }
+        return rowObj;
+      });
+
+      const colNames = [
+        'Metric', 'Section', 'Unit', 'Actual', 'Plan', 'Variance', 'Achievement %', 'SPLY', 'Growth %',
+        'Actual YTD', 'Plan YTD', 'YTD Variance', 'YTD Achievement %', 'YTD Growth %',
+        ...consData.availableMonths
+      ];
+
+      const columns: ColumnMetadata[] = colNames.map((name) => {
+        const isNum = name !== 'Metric' && name !== 'Section' && name !== 'Unit';
+        const isPct = name.includes('%');
+        const isCurr = name.includes('Actual') || name.includes('Plan') || name.includes('Variance') || name.includes('SPLY');
+        return {
+          name,
+          originalName: name,
+          detectedType: isPct ? 'percentage' : isCurr ? 'currency' : isNum ? 'number' : 'text',
+          detectedMeaning: isPct ? 'Variance' : isCurr ? 'Actual Metric' : 'Category / Dimension',
+          include: true,
+          sampleValues: rows.slice(0, 3).map((r) => r[name]),
+          nullCount: rows.filter((r) => r[name] === null || r[name] === undefined).length,
+          distinctCount: new Set(rows.map((r) => r[name])).size,
+          isCurrency: isCurr,
+          currencySymbol: 'TZS'
+        };
+      });
+
+      const sheetData: SheetData = {
+        name: consolidatedSheetName,
+        columns,
+        rows,
+        totalRows: rows.length,
+        totalColumns: columns.length,
+        missingValueCount: 0,
+        duplicateRowCount: 0
+      };
+
+      const datasetId = `ds_cons_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const cleanDatasetName = filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ');
+
+      const detectedTypesRecord: Record<string, string> = {};
+      columns.forEach((c) => {
+        detectedTypesRecord[c.name] = c.detectedType;
+      });
+
+      const dataset: Dataset = {
+        id: datasetId,
+        name: `VIGOR Group Consolidated — ${consData.reportingPeriod}`,
+        filename,
+        original_file_name: filename,
+        fileSize,
+        uploadedAt: new Date().toISOString(),
+        lastOpenedAt: new Date().toISOString(),
+        sheets: [sheetData],
+        selectedSheet: consolidatedSheetName,
+        sheetName: consolidatedSheetName,
+        sheetNames: workbook.SheetNames,
+        headers: colNames,
+        rows,
+        rowCount: rows.length,
+        columnCount: columns.length,
+        row_count: rows.length,
+        column_count: columns.length,
+        detectedTypes: detectedTypesRecord,
+        sector: 'Executive Operations',
+        sector_id: 'general',
+        sectorName: 'Executive Group Operations',
+        company: 'VIGOR Group',
+        company_id: 'vigor-group',
+        companyName: 'VIGOR Group Consolidated',
+        reportingPeriod: consData.reportingPeriod,
+        reporting_period: consData.reportingPeriod,
+        status: 'current',
+        isConsolidatedWorkbook: true,
+        consolidatedData: consData
+      };
+
+      console.log('[DASHBOARD] Dataset stored');
+      options?.onProgress?.(100, 'Consolidated report ready');
+      return dataset;
+    } catch (parseConsError: any) {
+      console.error('[CONSOLIDATED ERROR] Error parsing CONSOLIDATED sheet:', parseConsError);
+      throw parseConsError;
+    }
+  }
+
+  // If user requested Consolidated report specifically but sheet was not found
+  if (options?.preferConsolidated) {
+    console.error('[CONSOLIDATED ERROR] CONSOLIDATED worksheet not found among:', workbook.SheetNames);
+    throw new Error(`CONSOLIDATED_NOT_FOUND:${JSON.stringify(workbook.SheetNames)}`);
+  }
+
+  // 7. Branch: If Multi-Sheet Management Workbook without a CONSOLIDATED sheet
+  if (!isCSV && isManagementWorkbook(workbook)) {
+    console.log('[XLSX] Multi-sheet Management Workbook detected. Engaging advanced workbook engine.');
+    options?.onProgress?.(35, 'Analyzing VIGOR management workbook structure...');
+
+    const mgmtReport = await parseManagementWorkbook(file, (p) => {
+      options?.onProgress?.(p.percent, p.message);
+    });
+
+    const datasetId = `ds_mgmt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const cleanDatasetName = filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ');
+
+    // Generate SheetData for each company and aggregate report
+    const mgmtSheets: SheetData[] = [];
+
+    const buildSheetFromReport = (title: string, report: any): SheetData => {
+      const allMetrics = [...(report.operationalMetrics || []), ...(report.financialMetrics || [])];
+      const rows: Record<string, any>[] = allMetrics.map((m) => {
+        const rowObj: Record<string, any> = {
+          Metric: m.metricName,
+          Section: m.section === 'operational' ? 'Operational' : 'Financial',
+          Unit: m.unit || '',
+          Actual: m.actual,
+          Plan: m.plan,
+          Variance: m.variance,
+          'Achievement %': m.achievementPct !== null ? Number(m.achievementPct.toFixed(1)) : null,
+          SPLY: m.priorYear,
+          'Growth %': m.growthPct !== null ? Number(m.growthPct.toFixed(1)) : null
+        };
+        if (m.monthlyValues) {
+          for (const [mName, mVal] of Object.entries(m.monthlyValues)) {
+            rowObj[mName] = mVal;
+          }
+        }
+        return rowObj;
+      });
+
+      const colNames = ['Metric', 'Section', 'Unit', 'Actual', 'Plan', 'Variance', 'Achievement %', 'SPLY', 'Growth %', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'];
+      const columns: ColumnMetadata[] = colNames.map((name) => {
+        const isNum = name !== 'Metric' && name !== 'Section' && name !== 'Unit';
+        const isPct = name.includes('%');
+        const isCurr = name === 'Actual' || name === 'Plan' || name === 'Variance' || name === 'SPLY';
+        return {
+          name,
+          originalName: name,
+          detectedType: isPct ? 'percentage' : isCurr ? 'currency' : isNum ? 'number' : 'text',
+          detectedMeaning: isPct ? 'Variance' : isCurr ? 'Actual Metric' : 'Category / Dimension',
+          include: true,
+          sampleValues: rows.slice(0, 3).map((r) => r[name]),
+          nullCount: rows.filter((r) => r[name] === null || r[name] === undefined).length,
+          distinctCount: new Set(rows.map((r) => r[name])).size,
+          isCurrency: isCurr,
+          currencySymbol: 'TZS'
+        };
+      });
+
+      return {
+        name: title,
+        columns,
+        rows,
+        totalRows: rows.length,
+        totalColumns: columns.length,
+        missingValueCount: 0,
+        duplicateRowCount: 0
+      };
+    };
+
+    if (mgmtReport.consolidatedReport) {
+      mgmtSheets.push(buildSheetFromReport('CONSOLIDATED', mgmtReport.consolidatedReport));
+    }
+
+    for (const compReport of Object.values(mgmtReport.companies)) {
+      mgmtSheets.push(buildSheetFromReport(compReport.companyName, compReport));
+    }
+
+    for (const [secId, secReport] of Object.entries(mgmtReport.sectorReports)) {
+      mgmtSheets.push(buildSheetFromReport(secReport.companyName || secId, secReport));
+    }
+
+    const firstActiveSheet = mgmtSheets[0] || {
+      name: 'Summary',
+      columns: [],
+      rows: [],
+      totalRows: 0,
+      totalColumns: 0,
+      missingValueCount: 0,
+      duplicateRowCount: 0
+    };
+
+    const detectedTypesRecord: Record<string, string> = {};
+    firstActiveSheet.columns.forEach((c) => {
+      detectedTypesRecord[c.name] = c.detectedType;
+    });
+
+    const dataset: Dataset = {
+      id: datasetId,
+      name: cleanDatasetName,
+      filename,
+      original_file_name: filename,
+      fileSize,
+      uploadedAt: new Date().toISOString(),
+      lastOpenedAt: new Date().toISOString(),
+      sheets: mgmtSheets,
+      selectedSheet: firstActiveSheet.name,
+      sheetName: firstActiveSheet.name,
+      sheetNames: mgmtSheets.map((s) => s.name),
+      headers: firstActiveSheet.columns.map((c) => c.name),
+      rows: firstActiveSheet.rows,
+      rowCount: firstActiveSheet.totalRows,
+      columnCount: firstActiveSheet.totalColumns,
+      row_count: firstActiveSheet.totalRows,
+      column_count: firstActiveSheet.totalColumns,
+      detectedTypes: detectedTypesRecord,
+      sector: 'general',
+      sector_id: 'general',
+      sectorName: 'Group Level',
+      company: 'vigor-group',
+      company_id: 'vigor-group',
+      companyName: 'VIGOR Group Consolidated',
+      reportingPeriod: mgmtReport.reportingPeriod,
+      reporting_period: mgmtReport.reportingPeriod,
+      status: 'current',
+      isManagementWorkbook: true,
+      workbookReport: mgmtReport
+    };
+
+    console.log('[DATASET] Management Workbook Dataset constructed successfully:', dataset.id, `${mgmtReport.totalSheets} sheets, ${mgmtReport.operatingCompanyCount} operating companies`);
+    return dataset;
+  }
+
+  // 7. Otherwise, fallback to single-sheet flat dataset parsing
   const sheets: SheetData[] = [];
 
   // 6. Inspect each worksheet
