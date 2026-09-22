@@ -10,13 +10,20 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
-import { exec } from 'child_process';
+import cookieParser from 'cookie-parser';
+import crypto from 'crypto';
+import {
+  AUTH_CONFIG,
+  getAllowedEmailDomain,
+  isAllowedCompanyEmail
+} from './src/config/authConfig';
 import {
   Dataset,
   AskAIResult,
   ChartConfig,
   NormalizedMetric,
-  ConsolidatedPerformanceData
+  ConsolidatedPerformanceData,
+  User
 } from './src/types';
 import {
   initDbPool,
@@ -31,7 +38,12 @@ import {
   getAiMessagesFromDb,
   saveReportToDb,
   listReportsFromDb,
-  deleteReportFromDb
+  deleteReportFromDb,
+  upsertUserInDb,
+  getUserByIdFromDb,
+  createSessionInDb,
+  getSessionUserFromDb,
+  deleteSessionFromDb
 } from './server/db';
 import { formatCompactNumber, formatPercent } from './src/services/analyticsEngine';
 
@@ -40,8 +52,10 @@ dotenv.config();
 const currentFilename = typeof __filename !== 'undefined' ? __filename : (typeof import.meta !== 'undefined' && (import.meta as any).url ? fileURLToPath((import.meta as any).url) : '');
 const currentDirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(currentFilename || process.cwd());
 
-// In-Memory Fallback Cache for resilient offline/degraded operations
+// In-Memory Fallback Caches for resilient offline/degraded operations
 const memoryDatasetsStore = new Map<string, Dataset>();
+const memoryReportsStore = new Map<string, any>();
+const memoryAiMessagesStore = new Map<string, any[]>();
 
 // Lazy Gemini AI Client initialization
 let aiClient: GoogleGenAI | null = null;
@@ -59,36 +73,64 @@ function getGemini(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Ensure MariaDB daemon is active in container
-function ensureMariaDBRunning(): Promise<void> {
-  return new Promise(resolve => {
-    exec('mariadb -e "SELECT 1;" 2>/dev/null', (err) => {
-      if (!err) {
-        return resolve();
-      }
-      // Attempt start if stopped
-      exec('mkdir -p /run/mysqld && chown -R mysql:mysql /run/mysqld /var/lib/mysql && su -s /bin/bash mysql -c "mariadbd &"', () => {
-        setTimeout(resolve, 2000);
-      });
-    });
-  });
-}
-
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use(cookieParser());
   app.use(express.json({ limit: '60mb' }));
   app.use(express.urlencoded({ extended: true, limit: '60mb' }));
 
-  // Ensure DB ready
-  await ensureMariaDBRunning();
+  // Initialize DB pool if available
   await initDbPool().catch(err => {
     console.warn('[DB] MySQL init warning:', err?.message);
   });
 
   // ==========================================
-  // REST API: SYSTEM & HEALTH
+  // AUTHENTICATION MIDDLEWARE & STRICT SECURITY
+  // ==========================================
+
+  async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+    try {
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      const cookieToken = req.cookies?.[AUTH_CONFIG.SESSION_COOKIE_NAME];
+      const token = cookieToken || bearerToken;
+
+      if (!token) {
+        return res.status(401).json({
+          error: 'UNAUTHORIZED',
+          message: 'Authentication required. Please sign in with an authorised VIGOR account.'
+        });
+      }
+
+      const user = await getSessionUserFromDb(token);
+      if (!user || !user.is_active) {
+        return res.status(401).json({
+          error: 'SESSION_EXPIRED',
+          message: 'Your session has expired. Please sign in again.'
+        });
+      }
+
+      if (!isAllowedCompanyEmail(user.email)) {
+        return res.status(403).json({
+          error: 'ACCESS_RESTRICTED',
+          message: `Access is restricted to authorised VIGOR accounts (@${getAllowedEmailDomain()}).`
+        });
+      }
+
+      (req as any).user = user;
+      next();
+    } catch {
+      return res.status(401).json({
+        error: 'AUTH_ERROR',
+        message: 'Authentication check failed.'
+      });
+    }
+  }
+
+  // ==========================================
+  // REST API: SYSTEM & HEALTH (PUBLIC)
   // ==========================================
 
   app.get('/api/health', (req, res) => {
@@ -100,11 +142,182 @@ async function startServer() {
   });
 
   // ==========================================
-  // REST API: WORKBOOKS & PERSISTENCE (MYSQL)
+  // REST API: AUTHENTICATION (PUBLIC)
+  // ==========================================
+
+  // GET /api/auth/config - Public configuration for client OAuth initialization
+  app.get('/api/auth/config', (req, res) => {
+    res.json({
+      googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+      allowedDomain: getAllowedEmailDomain(),
+      isDevMode: process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_AUTH === 'true'
+    });
+  });
+
+  // GET /api/auth/me - Current user session check
+  app.get('/api/auth/me', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      const cookieToken = req.cookies?.[AUTH_CONFIG.SESSION_COOKIE_NAME];
+      const token = cookieToken || bearerToken;
+
+      if (!token) {
+        return res.json({ authenticated: false, user: null });
+      }
+
+      const user = await getSessionUserFromDb(token);
+      if (!user || !user.is_active || !isAllowedCompanyEmail(user.email)) {
+        return res.json({ authenticated: false, user: null });
+      }
+
+      res.json({ authenticated: true, user });
+    } catch {
+      res.json({ authenticated: false, user: null });
+    }
+  });
+
+  // POST /api/auth/google - Authenticate using verified Google ID token
+  app.post('/api/auth/google', async (req, res) => {
+    try {
+      const { credential } = req.body;
+      if (!credential || typeof credential !== 'string') {
+        return res.status(400).json({ error: 'MISSING_CREDENTIAL', message: 'Google credential token is required.' });
+      }
+
+      // Verify Google ID Token server-side via Google's official tokeninfo endpoint
+      const verifyResp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+      if (!verifyResp.ok) {
+        return res.status(401).json({ error: 'INVALID_TOKEN', message: 'Failed to verify Google identity token.' });
+      }
+
+      const googlePayload: any = await verifyResp.json();
+      const email = (googlePayload.email || '').toLowerCase().trim();
+      const isEmailVerified = googlePayload.email_verified === 'true' || googlePayload.email_verified === true;
+
+      if (!isEmailVerified) {
+        return res.status(403).json({
+          error: 'EMAIL_UNVERIFIED',
+          message: 'The Google email address is not verified by Google.'
+        });
+      }
+
+      // Strict server-side domain verification: @turkysgroup.co.tz
+      if (!isAllowedCompanyEmail(email)) {
+        console.warn(`[AUTH] Rejected non-company login attempt: ${email}`);
+        return res.status(403).json({
+          error: 'ACCESS_RESTRICTED',
+          message: `This application is available only to authorised VIGOR accounts (@${getAllowedEmailDomain()}).`
+        });
+      }
+
+      // Provision or update user record automatically on first login
+      const user = await upsertUserInDb({
+        email,
+        name: googlePayload.name || email.split('@')[0],
+        google_subject_id: googlePayload.sub,
+        avatar_url: googlePayload.picture
+      });
+
+      // Generate cryptographically secure session token
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + AUTH_CONFIG.SESSION_MAX_AGE_MS);
+      await createSessionInDb(user.id, sessionToken, expiresAt);
+
+      res.cookie(AUTH_CONFIG.SESSION_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: AUTH_CONFIG.SESSION_MAX_AGE_MS,
+        path: '/'
+      });
+
+      console.log(`[AUTH] Verified VIGOR user login: ${email} (${user.role})`);
+      res.json({
+        success: true,
+        token: sessionToken,
+        user
+      });
+    } catch (err: any) {
+      console.error('[AUTH] Google auth verification failed:', err);
+      res.status(500).json({ error: 'AUTH_FAILED', message: err?.message || 'Authentication failed' });
+    }
+  });
+
+  // POST /api/auth/dev-login - Development testing access for domain validation
+  app.post('/api/auth/dev-login', async (req, res) => {
+    try {
+      const isDev = process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_AUTH === 'true';
+      if (!isDev) {
+        return res.status(403).json({ error: 'FORBIDDEN', message: 'Development auth is disabled in production.' });
+      }
+
+      const { email, name } = req.body;
+      const cleanEmail = (email || '').toLowerCase().trim();
+
+      if (!cleanEmail) {
+        return res.status(400).json({ error: 'EMAIL_REQUIRED', message: 'Email address is required.' });
+      }
+
+      // Strict server-side corporate domain check (same exact check as production)
+      if (!isAllowedCompanyEmail(cleanEmail)) {
+        return res.status(403).json({
+          error: 'ACCESS_RESTRICTED',
+          message: `This application is available only to authorised VIGOR accounts (@${getAllowedEmailDomain()}).`
+        });
+      }
+
+      const user = await upsertUserInDb({
+        email: cleanEmail,
+        name: name || cleanEmail.split('@')[0]
+      });
+
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + AUTH_CONFIG.SESSION_MAX_AGE_MS);
+      await createSessionInDb(user.id, sessionToken, expiresAt);
+
+      res.cookie(AUTH_CONFIG.SESSION_COOKIE_NAME, sessionToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: AUTH_CONFIG.SESSION_MAX_AGE_MS,
+        path: '/'
+      });
+
+      res.json({
+        success: true,
+        token: sessionToken,
+        user
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: 'AUTH_FAILED', message: err?.message || 'Dev login failed' });
+    }
+  });
+
+  // POST /api/auth/logout - Terminate session & clear cookies
+  app.post('/api/auth/logout', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      const cookieToken = req.cookies?.[AUTH_CONFIG.SESSION_COOKIE_NAME];
+      const token = cookieToken || bearerToken;
+
+      if (token) {
+        await deleteSessionFromDb(token);
+      }
+      res.clearCookie(AUTH_CONFIG.SESSION_COOKIE_NAME, { path: '/' });
+      res.json({ success: true, message: 'Logged out successfully' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'LOGOUT_FAILED', message: err?.message || 'Logout failed' });
+    }
+  });
+
+  // ==========================================
+  // REST API: WORKBOOKS & PERSISTENCE (PROTECTED)
   // ==========================================
 
   // Check for duplicate upload
-  app.post('/api/workbooks/check-duplicate', async (req, res) => {
+  app.post('/api/workbooks/check-duplicate', requireAuth, async (req, res) => {
     try {
       const { hash } = req.body;
       if (!hash) {
@@ -123,15 +336,18 @@ async function startServer() {
   });
 
   // POST /api/workbooks - Auto-save workbook with transaction
-  app.post('/api/workbooks', async (req, res) => {
+  app.post('/api/workbooks', requireAuth, async (req, res) => {
     try {
       const dataset: Dataset = req.body;
       if (!dataset || !dataset.id) {
         return res.status(400).json({ error: 'Invalid workbook payload.' });
       }
 
+      const currentUser: User = (req as any).user;
       dataset.uploadedAt = dataset.uploadedAt || new Date().toISOString();
       dataset.lastOpenedAt = new Date().toISOString();
+      dataset.uploadedBy = currentUser?.name || 'VIGOR Member';
+      dataset.uploadedByUserId = currentUser?.id;
 
       // Always maintain in-memory cache as resilient backup
       memoryDatasetsStore.set(dataset.id, dataset);
@@ -166,7 +382,7 @@ async function startServer() {
   });
 
   // GET /api/workbooks - List stored workbooks for My Data
-  app.get('/api/workbooks', async (req, res) => {
+  app.get('/api/workbooks', requireAuth, async (req, res) => {
     try {
       if (isDatabaseConnected()) {
         const workbooks = await listWorkbooksFromDb();
@@ -191,7 +407,7 @@ async function startServer() {
   });
 
   // GET /api/workbooks/:id - Load stored parsed workbook from MySQL
-  app.get('/api/workbooks/:id', async (req, res) => {
+  app.get('/api/workbooks/:id', requireAuth, async (req, res) => {
     try {
       const id = req.params.id;
       if (isDatabaseConnected()) {
@@ -215,7 +431,7 @@ async function startServer() {
   });
 
   // DELETE /api/workbooks/:id - Cascading delete workbook
-  app.delete('/api/workbooks/:id', async (req, res) => {
+  app.delete('/api/workbooks/:id', requireAuth, async (req, res) => {
     try {
       const id = req.params.id;
       memoryDatasetsStore.delete(id);
@@ -229,7 +445,7 @@ async function startServer() {
   });
 
   // DELETE /api/workbooks - Clear all
-  app.delete('/api/workbooks', async (req, res) => {
+  app.delete('/api/workbooks', requireAuth, async (req, res) => {
     try {
       memoryDatasetsStore.clear();
       if (isDatabaseConnected()) {
@@ -242,17 +458,17 @@ async function startServer() {
   });
 
   // Backward compatibility aliases for existing client code
-  app.get('/api/datasets', (req, res) => res.redirect(307, '/api/workbooks'));
-  app.post('/api/datasets/upload', (req, res) => res.redirect(307, '/api/workbooks'));
-  app.get('/api/datasets/:id', (req, res) => res.redirect(307, `/api/workbooks/${req.params.id}`));
-  app.delete('/api/datasets/:id', (req, res) => res.redirect(307, `/api/workbooks/${req.params.id}`));
-  app.delete('/api/datasets', (req, res) => res.redirect(307, '/api/workbooks'));
+  app.get('/api/datasets', requireAuth, (req, res) => res.redirect(307, '/api/workbooks'));
+  app.post('/api/datasets/upload', requireAuth, (req, res) => res.redirect(307, '/api/workbooks'));
+  app.get('/api/datasets/:id', requireAuth, (req, res) => res.redirect(307, `/api/workbooks/${req.params.id}`));
+  app.delete('/api/datasets/:id', requireAuth, (req, res) => res.redirect(307, `/api/workbooks/${req.params.id}`));
+  app.delete('/api/datasets', requireAuth, (req, res) => res.redirect(307, '/api/workbooks'));
 
   // ==========================================
   // REST API: ASK VIGOR AI (GROUNDED IN WORKBOOK)
   // ==========================================
 
-  app.post('/api/workbooks/:id/query', async (req, res) => {
+  app.post('/api/workbooks/:id/query', requireAuth, async (req, res) => {
     try {
       const { question, sheetName, scope, datasetPayload } = req.body;
       const workbookId = req.params.id;
@@ -450,7 +666,28 @@ MANDATORY RULES:
         }
       }
 
-      // Persist conversation to MySQL
+      // Cache conversation in memory
+      const convKey = `${workbookId}_${activeScope}`;
+      const existingMsgs = memoryAiMessagesStore.get(convKey) || [];
+      const userMsg = {
+        id: `msg_${Date.now() - 1}_u`,
+        role: 'user',
+        content: question,
+        created_at: new Date().toISOString()
+      };
+      const aiMsg = {
+        id: `msg_${Date.now()}_a`,
+        role: 'assistant',
+        content: answerText,
+        calculations,
+        chart,
+        source_context: sourceContext,
+        created_at: new Date().toISOString()
+      };
+      existingMsgs.push(userMsg, aiMsg);
+      memoryAiMessagesStore.set(convKey, existingMsgs);
+
+      // Persist conversation to MySQL if connected
       if (isDatabaseConnected()) {
         await saveAiMessageToDb(
           workbookId,
@@ -479,14 +716,18 @@ MANDATORY RULES:
   });
 
   // GET /api/workbooks/:id/ai/history - Retrieve conversation history
-  app.get('/api/workbooks/:id/ai/history', async (req, res) => {
+  app.get('/api/workbooks/:id/ai/history', requireAuth, async (req, res) => {
     try {
       const scope = (req.query.scope as string) || 'Consolidated';
       if (isDatabaseConnected()) {
         const messages = await getAiMessagesFromDb(req.params.id, scope);
-        return res.json(messages);
+        if (messages && messages.length > 0) {
+          return res.json(messages);
+        }
       }
-      res.json([]);
+      const convKey = `${req.params.id}_${scope}`;
+      const memMessages = memoryAiMessagesStore.get(convKey) || [];
+      res.json(memMessages);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed retrieving history' });
     }
@@ -497,12 +738,15 @@ MANDATORY RULES:
   // ==========================================
 
   // POST /api/reports - Save generated report record in MySQL
-  app.post('/api/reports', async (req, res) => {
+  app.post('/api/reports', requireAuth, async (req, res) => {
     try {
       const report = req.body;
       if (!report || !report.id || !report.workbook_id) {
         return res.status(400).json({ error: 'Invalid report structure.' });
       }
+      report.created_at = report.created_at || new Date().toISOString();
+      memoryReportsStore.set(report.id, report);
+
       if (isDatabaseConnected()) {
         await saveReportToDb(report);
       }
@@ -513,22 +757,30 @@ MANDATORY RULES:
   });
 
   // GET /api/reports - List stored reports from MySQL
-  app.get('/api/reports', async (req, res) => {
+  app.get('/api/reports', requireAuth, async (req, res) => {
     try {
       const workbookId = req.query.workbookId as string | undefined;
       if (isDatabaseConnected()) {
         const reports = await listReportsFromDb(workbookId);
-        return res.json(reports);
+        if (reports && reports.length > 0) {
+          return res.json(reports);
+        }
       }
-      res.json([]);
+      let reports = Array.from(memoryReportsStore.values());
+      if (workbookId) {
+        reports = reports.filter(r => r.workbook_id === workbookId);
+      }
+      reports.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      res.json(reports);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed listing reports' });
     }
   });
 
   // DELETE /api/reports/:id - Delete a report
-  app.delete('/api/reports/:id', async (req, res) => {
+  app.delete('/api/reports/:id', requireAuth, async (req, res) => {
     try {
+      memoryReportsStore.delete(req.params.id);
       if (isDatabaseConnected()) {
         await deleteReportFromDb(req.params.id);
       }

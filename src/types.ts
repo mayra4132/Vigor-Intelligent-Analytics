@@ -81,6 +81,9 @@ export interface Dataset {
   fileSize: number;
   uploadedAt: string;
   uploaded_by?: string;
+  uploadedBy?: string;
+  uploaded_by_user_id?: string;
+  uploadedByUserId?: string;
   lastOpenedAt: string;
   sheets: SheetData[];
   selectedSheet: string;
@@ -467,7 +470,31 @@ export type AppView =
   | 'ask'
   | 'datasets'
   | 'report'
-  | 'settings';
+  | 'settings'
+  | 'login'
+  | 'access_restricted';
+
+export type UserRole = 'admin' | 'manager' | 'viewer';
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  google_subject_id?: string;
+  avatar_url?: string;
+  role: UserRole;
+  is_active: boolean;
+  last_login_at?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AuthState {
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  user: User | null;
+  error?: string | null;
+}
 
 export interface SavedReport {
   id: string;

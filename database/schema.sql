@@ -135,3 +135,31 @@ CREATE TABLE IF NOT EXISTS reports (
   INDEX idx_reports_workbook (workbook_id),
   INDEX idx_reports_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 8. Corporate Users (@turkysgroup.co.tz)
+CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(64) PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  google_subject_id VARCHAR(128) NULL,
+  avatar_url TEXT NULL,
+  role VARCHAR(32) DEFAULT 'viewer',
+  is_active TINYINT(1) DEFAULT 1,
+  last_login_at DATETIME NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_users_email (email),
+  INDEX idx_users_google_sub (google_subject_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 9. Sessions (Persistent Auth)
+CREATE TABLE IF NOT EXISTS sessions (
+  id VARCHAR(128) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  token_hash VARCHAR(128) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_sessions_user (user_id),
+  INDEX idx_sessions_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

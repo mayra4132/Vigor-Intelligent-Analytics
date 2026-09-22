@@ -43,6 +43,7 @@ export async function initDbPool(): Promise<boolean> {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
+      connectTimeout: 2000,
       ssl: cfg.ssl ? { rejectUnauthorized: false } : undefined
     });
 
@@ -598,4 +599,211 @@ export async function deleteReportFromDb(reportId: string): Promise<boolean> {
   const p = await getPool();
   const [res]: any = await p.query('DELETE FROM reports WHERE id = ?', [reportId]);
   return res.affectedRows > 0;
+}
+
+// ==========================================
+// USER & SESSION MANAGEMENT (AUTH)
+// ==========================================
+
+import { User, UserRole } from '../src/types';
+
+// In-Memory fallback stores for auth
+export const memoryUsersStore = new Map<string, User>();
+export const memorySessionsStore = new Map<string, { userId: string; expiresAt: number }>();
+
+function determineUserRole(email: string): UserRole {
+  const adminEmails = (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+  if (adminEmails.includes(email.trim().toLowerCase())) {
+    return 'admin';
+  }
+  return 'viewer';
+}
+
+export async function upsertUserInDb(userData: {
+  email: string;
+  name: string;
+  google_subject_id?: string;
+  avatar_url?: string;
+}): Promise<User> {
+  const email = userData.email.trim().toLowerCase();
+  const name = userData.name.trim() || email.split('@')[0];
+  const role = determineUserRole(email);
+  const now = new Date().toISOString();
+
+  // In-memory update
+  let existingUser = Array.from(memoryUsersStore.values()).find(u => u.email.toLowerCase() === email);
+  if (existingUser) {
+    existingUser.name = name;
+    if (userData.google_subject_id) existingUser.google_subject_id = userData.google_subject_id;
+    if (userData.avatar_url) existingUser.avatar_url = userData.avatar_url;
+    existingUser.last_login_at = now;
+    existingUser.updated_at = now;
+    if (determineUserRole(email) === 'admin') existingUser.role = 'admin';
+  } else {
+    existingUser = {
+      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      email,
+      name,
+      google_subject_id: userData.google_subject_id,
+      avatar_url: userData.avatar_url,
+      role,
+      is_active: true,
+      last_login_at: now,
+      created_at: now,
+      updated_at: now
+    };
+    memoryUsersStore.set(existingUser.id, existingUser);
+  }
+
+  // DB update if connected
+  if (isDatabaseConnected()) {
+    try {
+      const p = await getPool();
+      await p.query(
+        `INSERT INTO users (id, email, name, google_subject_id, avatar_url, role, is_active, last_login_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name),
+           google_subject_id = COALESCE(VALUES(google_subject_id), google_subject_id),
+           avatar_url = COALESCE(VALUES(avatar_url), avatar_url),
+           last_login_at = NOW(),
+           updated_at = NOW()`,
+        [
+          existingUser.id,
+          email,
+          name,
+          userData.google_subject_id || null,
+          userData.avatar_url || null,
+          role
+        ]
+      );
+    } catch (err: any) {
+      console.warn('[DB] Failed upserting user in DB:', err?.message);
+    }
+  }
+
+  return existingUser;
+}
+
+export async function getUserByIdFromDb(userId: string): Promise<User | null> {
+  const memUser = memoryUsersStore.get(userId);
+  if (memUser) return memUser;
+
+  if (isDatabaseConnected()) {
+    try {
+      const p = await getPool();
+      const [rows]: any = await p.query('SELECT * FROM users WHERE id = ? AND is_active = 1 LIMIT 1', [userId]);
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        const user: User = {
+          id: r.id,
+          email: r.email,
+          name: r.name,
+          google_subject_id: r.google_subject_id,
+          avatar_url: r.avatar_url,
+          role: r.role || 'viewer',
+          is_active: Boolean(r.is_active),
+          last_login_at: r.last_login_at ? new Date(r.last_login_at).toISOString() : undefined,
+          created_at: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+          updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : undefined
+        };
+        memoryUsersStore.set(user.id, user);
+        return user;
+      }
+    } catch (err: any) {
+      console.warn('[DB] Failed getting user by ID:', err?.message);
+    }
+  }
+  return null;
+}
+
+export async function createSessionInDb(userId: string, token: string, expiresAt: Date): Promise<void> {
+  // In-memory
+  memorySessionsStore.set(token, {
+    userId,
+    expiresAt: expiresAt.getTime()
+  });
+
+  // DB if connected
+  if (isDatabaseConnected()) {
+    try {
+      const p = await getPool();
+      const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      await p.query(
+        'INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, NOW())',
+        [sessionId, userId, token, expiresAt]
+      );
+    } catch (err: any) {
+      console.warn('[DB] Failed saving session to DB:', err?.message);
+    }
+  }
+}
+
+export async function getSessionUserFromDb(token: string): Promise<User | null> {
+  if (!token) return null;
+
+  // Check in-memory session
+  const memSession = memorySessionsStore.get(token);
+  if (memSession) {
+    if (Date.now() > memSession.expiresAt) {
+      memorySessionsStore.delete(token);
+      return null;
+    }
+    return getUserByIdFromDb(memSession.userId);
+  }
+
+  // Check DB if connected
+  if (isDatabaseConnected()) {
+    try {
+      const p = await getPool();
+      const [rows]: any = await p.query(
+        `SELECT u.* FROM sessions s
+         JOIN users u ON s.user_id = u.id
+         WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.is_active = 1
+         LIMIT 1`,
+        [token]
+      );
+      if (rows && rows.length > 0) {
+        const r = rows[0];
+        const user: User = {
+          id: r.id,
+          email: r.email,
+          name: r.name,
+          google_subject_id: r.google_subject_id,
+          avatar_url: r.avatar_url,
+          role: r.role || 'viewer',
+          is_active: Boolean(r.is_active),
+          last_login_at: r.last_login_at ? new Date(r.last_login_at).toISOString() : undefined,
+          created_at: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+          updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : undefined
+        };
+        // cache in memory
+        memoryUsersStore.set(user.id, user);
+        memorySessionsStore.set(token, {
+          userId: user.id,
+          expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+        });
+        return user;
+      }
+    } catch (err: any) {
+      console.warn('[DB] Failed querying session from DB:', err?.message);
+    }
+  }
+
+  return null;
+}
+
+export async function deleteSessionFromDb(token: string): Promise<void> {
+  memorySessionsStore.delete(token);
+  if (isDatabaseConnected()) {
+    try {
+      const p = await getPool();
+      await p.query('DELETE FROM sessions WHERE token_hash = ?', [token]);
+    } catch (err: any) {
+      console.warn('[DB] Failed deleting session from DB:', err?.message);
+    }
+  }
 }
