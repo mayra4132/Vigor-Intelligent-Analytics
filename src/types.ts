@@ -109,15 +109,55 @@ export interface Dataset {
   // Dedicated Consolidated Sheet data for MVP
   isConsolidatedWorkbook?: boolean;
   consolidatedData?: ConsolidatedPerformanceData;
+  // Multi-Sheet Navigation & Workbook Explorer
+  parsedWorkbook?: ParsedWorkbook;
+  activeSheetName?: string;
 }
 
 export type SheetRole =
+  | 'group'
+  | 'sector'
   | 'company'
   | 'sector_summary'
   | 'group_consolidated'
   | 'helper'
   | 'chart'
   | 'unknown';
+
+export interface ParsedSheet {
+  sheetName: string;
+  displayName: string;
+  role: SheetRole;
+  sectorId?: string;
+  sectorName?: string;
+  companyId?: string;
+  companyName?: string;
+  companyCode?: string;
+  reportingPeriod?: string;
+  isAnalysable: boolean;
+  performanceData?: ConsolidatedPerformanceData;
+  rawPreview?: (string | number | null)[][];
+  cellCount?: number;
+  rowCount?: number;
+  colCount?: number;
+  dataQualityIssues?: string[];
+  hasFormulas?: boolean;
+  hasErrors?: boolean;
+}
+
+export interface ParsedWorkbook {
+  filename: string;
+  fileSize: number;
+  reportingPeriod: string;
+  totalSheets: number;
+  sheets: ParsedSheet[];
+  groupSheets: ParsedSheet[];
+  sectorSheets: ParsedSheet[];
+  companySheets: ParsedSheet[];
+  helperSheets: ParsedSheet[];
+  chartSheets: ParsedSheet[];
+  unknownSheets: ParsedSheet[];
+}
 
 export interface SheetClassification {
   sheetName: string;
@@ -417,6 +457,7 @@ export type AskAIScope = 'group' | 'sector' | 'company';
 
 export type AppView =
   | 'overview'
+  | 'workbook'
   | 'group_overview'
   | 'sector_overview'
   | 'dashboard'
@@ -427,3 +468,34 @@ export type AppView =
   | 'datasets'
   | 'report'
   | 'settings';
+
+export interface SavedReport {
+  id: string;
+  workbook_id: string;
+  workbook_name?: string;
+  sheet_id?: string;
+  scope: string;
+  report_type: string;
+  title: string;
+  reporting_period?: string;
+  generated_by?: string;
+  created_at: string;
+  snapshot_json?: any;
+}
+
+export interface AIConversationMessage {
+  id: string;
+  conversation_id?: string;
+  role: 'user' | 'assistant';
+  content: string;
+  calculations?: { label: string; value: string | number }[];
+  chart?: ChartConfig;
+  source_context?: string;
+  created_at: string;
+}
+
+export interface SaveStatus {
+  state: 'idle' | 'saving' | 'saved' | 'error';
+  message?: string;
+  lastSavedAt?: string;
+}

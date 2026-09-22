@@ -135,8 +135,39 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
       planVal !== null &&
       !isNaN(planVal);
 
+    const isLowerBetter = (name?: string | null): boolean => {
+      if (!name) return false;
+      const upper = name.toUpperCase();
+      return (
+        upper.includes('OPEX') ||
+        upper.includes('EXPENSE') ||
+        upper.includes('COST') ||
+        upper.includes('OVERDUE') ||
+        upper.includes('DEBTOR') ||
+        upper.includes('LIABILITY') ||
+        upper.includes('PAYABLE') ||
+        upper.includes('LOSS') ||
+        upper.includes('DOWNTIME')
+      );
+    };
+
     const variance = hasBoth ? Number(actualVal) - Number(planVal) : null;
     const achievementPct = hasBoth && Number(planVal) !== 0 ? (Number(actualVal) / Number(planVal)) * 100 : null;
+
+    const lowerBetter = isLowerBetter(metricName);
+    const isFavorable = lowerBetter
+      ? (variance !== null && variance < 0)
+      : (variance !== null && variance > 0);
+    const varColorClass = variance === 0 || variance === null ? 'text-slate-400' : isFavorable ? 'text-emerald-400' : 'text-rose-400';
+
+    let achColorClass = 'text-slate-400';
+    if (achievementPct !== null) {
+      if (lowerBetter) {
+        achColorClass = achievementPct <= 100 ? 'text-emerald-400' : achievementPct > 115 ? 'text-rose-400' : 'text-amber-400';
+      } else {
+        achColorClass = achievementPct >= 100 ? 'text-emerald-400' : achievementPct < 85 ? 'text-rose-400' : 'text-amber-400';
+      }
+    }
 
     return (
       <div className="bg-slate-900 border border-slate-700/80 rounded-xl p-3 shadow-xl text-xs text-slate-100 min-w-[190px]">
@@ -166,14 +197,14 @@ export const AnalyticsChart: React.FC<AnalyticsChartProps> = ({
           <div className="mt-2.5 pt-2 border-t border-slate-800 space-y-1 text-[11px]">
             <div className="flex items-center justify-between text-slate-400">
               <span>Variance:</span>
-              <span className={`font-semibold ${variance !== null && variance >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <span className={`font-semibold ${varColorClass}`}>
                 {variance !== null && variance > 0 ? '+' : ''}{formatNum(variance)}
               </span>
             </div>
             {achievementPct !== null && (
               <div className="flex items-center justify-between text-slate-400">
                 <span>Achievement:</span>
-                <span className={`font-semibold ${achievementPct >= 100 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                <span className={`font-semibold ${achColorClass}`}>
                   {achievementPct.toFixed(1)}%
                 </span>
               </div>

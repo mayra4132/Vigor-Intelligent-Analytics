@@ -44,6 +44,8 @@ interface DashboardPageProps {
   onNavigateToGroup?: () => void;
   onNavigateToUpload?: (companyId?: string) => void;
   onOpenCompanyModal?: () => void;
+  onSelectSheet?: (sheetName: string) => void;
+  onOpenExplorer?: () => void;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
@@ -56,16 +58,20 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   onNavigateToUnderstanding,
   onNavigateToGroup,
   onNavigateToUpload,
-  onOpenCompanyModal
+  onOpenCompanyModal,
+  onSelectSheet,
+  onOpenExplorer
 }) => {
   // If this is a dedicated Consolidated Workbook (MVP Priority)
-  if (dataset.isConsolidatedWorkbook && dataset.consolidatedData) {
+  if (dataset.consolidatedData) {
     return (
       <ConsolidatedManagementDashboard
         dataset={dataset}
         consolidatedData={dataset.consolidatedData}
         onNavigateToAskAI={onNavigateToAskAI}
         onNavigateToUpload={onNavigateToUpload}
+        onSelectSheet={onSelectSheet}
+        onOpenExplorer={onOpenExplorer}
       />
     );
   }

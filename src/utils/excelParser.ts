@@ -4,11 +4,39 @@
  */
 
 import * as XLSX from 'xlsx';
-import { SheetData, ColumnMetadata, Dataset } from '../types';
+import {
+  SheetData,
+  ColumnMetadata,
+  Dataset,
+  ParsedSheet,
+  ParsedWorkbook,
+  SheetRole,
+  ConsolidatedPerformanceData
+} from '../types';
 import { detectColumnTypeAndMeaning, cleanHeaderName } from './typeDetector';
-import { COMPANY_BY_ID, SECTOR_BY_ID, GENERAL_SECTOR } from '../data/groupStructure';
+import {
+  COMPANY_BY_ID,
+  SECTOR_BY_ID,
+  GENERAL_SECTOR,
+  classifySheetName,
+  ALL_VIGOR_COMPANIES,
+  VIGOR_SECTORS
+} from '../data/groupStructure';
 import { isManagementWorkbook, parseManagementWorkbook } from './workbookParser';
 import { findConsolidatedSheetName, parseConsolidatedWorksheet } from './consolidatedParser';
+import { cacheWorkbook, getCachedWorkbook } from './workbookCache';
+
+function findBestHeaderRow(rawRows: any[][]): number {
+  if (!rawRows || rawRows.length === 0) return 0;
+  for (let i = 0; i < Math.min(rawRows.length, 10); i++) {
+    const row = rawRows[i];
+    if (Array.isArray(row)) {
+      const nonEmpty = row.filter(c => c !== null && c !== undefined && String(c).trim() !== '');
+      if (nonEmpty.length >= 2) return i;
+    }
+  }
+  return 0;
+}
 
 export interface ParseOptions {
   sectorId?: string;
@@ -168,7 +196,122 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
       };
 
       const datasetId = `ds_cons_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const cleanDatasetName = filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ');
+      cacheWorkbook(datasetId, workbook);
+
+      // Classify and register ALL sheets in workbook
+      const hiddenSheetMap: Record<string, boolean> = {};
+      if (workbook.Workbook && (workbook.Workbook as any).Sheets) {
+        (workbook.Workbook as any).Sheets.forEach((sMeta: any) => {
+          if (sMeta.name && sMeta.Hidden) {
+            hiddenSheetMap[sMeta.name] = true;
+          }
+        });
+      }
+
+      const parsedSheets: ParsedSheet[] = workbook.SheetNames.map((sName) => {
+        const isHidden = !!hiddenSheetMap[sName];
+        const sc = classifySheetName(sName, isHidden);
+        const displayName =
+          sc.companyName ||
+          sc.sectorName ||
+          (sc.role === 'group_consolidated' || sc.role === 'group'
+            ? 'VIGOR Group Consolidated'
+            : sName);
+        const isAnalysable =
+          sc.role === 'company' ||
+          sc.role === 'sector_summary' ||
+          sc.role === 'group_consolidated' ||
+          sc.role === 'group' ||
+          sc.role === 'sector';
+
+        let normalizedRole: SheetRole = sc.role;
+        if (normalizedRole === 'group_consolidated') normalizedRole = 'group';
+        if (normalizedRole === 'sector_summary') normalizedRole = 'sector';
+
+        const pSheet: ParsedSheet = {
+          sheetName: sName,
+          displayName,
+          role: normalizedRole,
+          sectorId: sc.sectorId,
+          sectorName: sc.sectorName,
+          companyId: sc.companyId,
+          companyName: sc.companyName,
+          companyCode: sName,
+          reportingPeriod: consData.reportingPeriod || 'August 2026',
+          isAnalysable
+        };
+
+        if (sName.toLowerCase() === consolidatedSheetName.toLowerCase()) {
+          pSheet.performanceData = consData;
+        }
+
+        return pSheet;
+      });
+
+      const groupSheets = parsedSheets.filter(s => s.role === 'group');
+      const sectorSheets = parsedSheets.filter(s => s.role === 'sector');
+      const companySheets = parsedSheets.filter(s => s.role === 'company');
+      const helperSheets = parsedSheets.filter(s => s.role === 'helper');
+      const chartSheets = parsedSheets.filter(s => s.role === 'chart');
+      const unknownSheets = parsedSheets.filter(s => s.role === 'unknown');
+
+      const parsedWorkbook: ParsedWorkbook = {
+        filename,
+        fileSize,
+        reportingPeriod: consData.reportingPeriod || 'August 2026',
+        totalSheets: workbook.SheetNames.length,
+        sheets: parsedSheets,
+        groupSheets,
+        sectorSheets,
+        companySheets,
+        helperSheets,
+        chartSheets,
+        unknownSheets
+      };
+
+      // Lightweight sheet data for all sheets so tabular and raw previews work immediately
+      const allSheetsList: SheetData[] = [sheetData];
+      for (const sName of workbook.SheetNames) {
+        if (sName.toLowerCase() === consolidatedSheetName.toLowerCase()) continue;
+        const otherWs = workbook.Sheets[sName];
+        if (!otherWs) continue;
+        try {
+          const rawRows: any[] = XLSX.utils.sheet_to_json(otherWs, { header: 1, defval: null });
+          if (rawRows.length > 0) {
+            const hIdx = findBestHeaderRow(rawRows);
+            const rawH = (rawRows[hIdx] || []).map((h: any, i: number) => String(h || `Col_${i + 1}`).trim());
+            const clnH = rawH.map(cleanHeaderName);
+            const subRows = rawRows.slice(hIdx + 1, hIdx + 50).map((r: any[]) => {
+              const rObj: Record<string, any> = {};
+              clnH.forEach((h: string, idx: number) => {
+                rObj[h] = r[idx] ?? null;
+              });
+              return rObj;
+            });
+            const otherCols: ColumnMetadata[] = clnH.map((name: string) => ({
+              name,
+              originalName: name,
+              detectedType: 'text',
+              detectedMeaning: 'Attribute',
+              include: true,
+              sampleValues: subRows.slice(0, 3).map(r => r[name]),
+              nullCount: 0,
+              distinctCount: 0
+            }));
+            allSheetsList.push({
+              name: sName,
+              columns: otherCols,
+              rows: subRows,
+              totalRows: rawRows.length,
+              totalColumns: clnH.length,
+              missingValueCount: 0,
+              duplicateRowCount: 0
+            });
+          }
+        } catch {
+          // Keep parsing other sheets safely
+        }
+      }
 
       const detectedTypesRecord: Record<string, string> = {};
       columns.forEach((c) => {
@@ -183,7 +326,7 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
         fileSize,
         uploadedAt: new Date().toISOString(),
         lastOpenedAt: new Date().toISOString(),
-        sheets: [sheetData],
+        sheets: allSheetsList,
         selectedSheet: consolidatedSheetName,
         sheetName: consolidatedSheetName,
         sheetNames: workbook.SheetNames,
@@ -204,11 +347,13 @@ export async function parseExcelFile(file: File, options?: ParseOptions): Promis
         reporting_period: consData.reportingPeriod,
         status: 'current',
         isConsolidatedWorkbook: true,
-        consolidatedData: consData
+        consolidatedData: consData,
+        parsedWorkbook,
+        activeSheetName: consolidatedSheetName
       };
 
-      console.log('[DASHBOARD] Dataset stored');
-      options?.onProgress?.(100, 'Consolidated report ready');
+      console.log('[DASHBOARD] Complete multi-sheet dataset initialized with', parsedWorkbook.sheets.length, 'sheets');
+      options?.onProgress?.(100, 'Workbook ready');
       return dataset;
     } catch (parseConsError: any) {
       console.error('[CONSOLIDATED ERROR] Error parsing CONSOLIDATED sheet:', parseConsError);
@@ -682,5 +827,124 @@ export function parseCleanNumber(val: any): number | null {
   if (isNaN(num)) return null;
 
   return isNegative ? -num : num;
+}
+
+/**
+ * Retrieves or lazily extracts the ConsolidatedPerformanceData for ANY sheet in the workbook.
+ * Operates in memory in < 5ms without re-reading or re-uploading the file.
+ */
+export function getOrParseSheetPerformance(
+  dataset: Dataset,
+  targetSheetName: string
+): ConsolidatedPerformanceData | null {
+  if (!dataset || !targetSheetName) return null;
+
+  // 1. Check if already parsed in dataset.parsedWorkbook
+  const pSheet = dataset.parsedWorkbook?.sheets.find(
+    s => s.sheetName.toLowerCase() === targetSheetName.toLowerCase()
+  );
+  if (pSheet?.performanceData) {
+    return pSheet.performanceData;
+  }
+
+  // 2. If it's the currently active consolidatedData and names match
+  if (
+    dataset.consolidatedData &&
+    (dataset.activeSheetName?.toLowerCase() === targetSheetName.toLowerCase() ||
+      dataset.selectedSheet?.toLowerCase() === targetSheetName.toLowerCase())
+  ) {
+    return dataset.consolidatedData;
+  }
+
+  // 3. Look up workbook in memory cache
+  const wb = getCachedWorkbook(dataset.id);
+  if (!wb) {
+    if (
+      dataset.consolidatedData &&
+      (dataset.consolidatedData.sheetName || '').toLowerCase() === targetSheetName.toLowerCase()
+    ) {
+      return dataset.consolidatedData;
+    }
+    return null;
+  }
+
+  const ws =
+    wb.Sheets[targetSheetName] ||
+    Object.entries(wb.Sheets).find(
+      ([name]) => name.toLowerCase() === targetSheetName.toLowerCase()
+    )?.[1];
+
+  if (!ws) return null;
+
+  try {
+    const perfData = parseConsolidatedWorksheet(ws, targetSheetName, dataset.filename);
+    if (pSheet) {
+      pSheet.performanceData = perfData;
+    }
+    return perfData;
+  } catch (err) {
+    console.error(`[XLSX] Failed parsing performance data for sheet '${targetSheetName}':`, err);
+    return null;
+  }
+}
+
+/**
+ * Returns a 2D raw cell grid for instant "Source Data / Sheet Preview" of any worksheet.
+ */
+export function getSheetRawPreview(
+  dataset: Dataset,
+  targetSheetName: string
+): (string | number | null)[][] {
+  if (!dataset || !targetSheetName) return [];
+
+  const pSheet = dataset.parsedWorkbook?.sheets.find(
+    s => s.sheetName.toLowerCase() === targetSheetName.toLowerCase()
+  );
+  if (pSheet?.rawPreview && pSheet.rawPreview.length > 0) {
+    return pSheet.rawPreview;
+  }
+
+  const wb = getCachedWorkbook(dataset.id);
+  if (!wb) return [];
+
+  const ws =
+    wb.Sheets[targetSheetName] ||
+    Object.entries(wb.Sheets).find(
+      ([name]) => name.toLowerCase() === targetSheetName.toLowerCase()
+    )?.[1];
+
+  if (!ws) return [];
+
+  try {
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:AJ80');
+    const maxR = Math.min(range.e.r, 80);
+    const maxC = Math.min(range.e.c, 35);
+    const grid: (string | number | null)[][] = [];
+
+    for (let r = 0; r <= maxR; r++) {
+      const row: (string | number | null)[] = [];
+      for (let c = 0; c <= maxC; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        const cell = ws[cellRef];
+        if (!cell || cell.v === undefined || cell.v === null) {
+          row.push(null);
+        } else if (typeof cell.v === 'number') {
+          row.push(cell.v);
+        } else {
+          row.push(String(cell.w || cell.v).trim());
+        }
+      }
+      if (row.some(v => v !== null && v !== '')) {
+        grid.push(row);
+      }
+    }
+
+    if (pSheet) {
+      pSheet.rawPreview = grid;
+    }
+    return grid;
+  } catch {
+    return [];
+  }
 }
 

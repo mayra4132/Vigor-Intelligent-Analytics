@@ -21,7 +21,14 @@ import {
   CheckCircle2,
   HelpCircle,
   ArrowRight,
-  Info
+  Info,
+  Building2,
+  Factory,
+  ChevronRight,
+  Search,
+  FileSpreadsheet,
+  TableProperties,
+  SlidersHorizontal
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -39,29 +46,37 @@ import {
 import { ConsolidatedPerformanceData, NormalizedMetric, Dataset } from '../types';
 import { AnalyticsChart, AnalyticsChartType } from './AnalyticsChart';
 import { normalizeNumericValue } from '../utils/monthNormalizer';
+import { WorkbookSheetSwitcher } from './WorkbookSheetSwitcher';
+import { getSheetRawPreview } from '../utils/excelParser';
 
 interface ConsolidatedManagementDashboardProps {
   dataset: Dataset;
   consolidatedData: ConsolidatedPerformanceData;
   onNavigateToAskAI?: (initialQuestion?: string) => void;
   onNavigateToUpload?: () => void;
+  onSelectSheet?: (sheetName: string) => void;
+  onOpenExplorer?: () => void;
 }
 
-type DashboardTab = 'current_month' | 'ytd' | 'trend';
+export type DashboardTab = 'overview' | 'financial' | 'operational' | 'trend' | 'ytd' | 'data' | 'current_month';
 
 export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDashboardProps> = ({
   dataset,
   consolidatedData,
   onNavigateToAskAI,
-  onNavigateToUpload
+  onNavigateToUpload,
+  onSelectSheet,
+  onOpenExplorer
 }) => {
-  const [activeTab, setActiveTab] = useState<DashboardTab>('current_month');
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [selectedOpMetricId, setSelectedOpMetricId] = useState<string>('');
   const [selectedTrendMetricId, setSelectedTrendMetricId] = useState<string>('');
   const [trendChartType, setTrendChartType] = useState<AnalyticsChartType>('line');
   const [opViewMode, setOpViewMode] = useState<'snapshot' | 'table'>('snapshot');
   const [opChartFormat, setOpChartFormat] = useState<'grouped' | 'horizontal'>('grouped');
   const [showAiNotice, setShowAiNotice] = useState(false);
+  const [sourceDataView, setSourceDataView] = useState<'grid' | 'metrics'>('grid');
+  const [sourceDataSearch, setSourceDataSearch] = useState<string>('');
 
   useEffect(() => {
     console.log('[DASHBOARD] Render complete');
@@ -141,7 +156,12 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
       upper.includes('DEBTOR') ||
       upper.includes('LIABILITY') ||
       upper.includes('PAYABLE') ||
-      upper.includes('LOSS')
+      upper.includes('LOSS') ||
+      upper.includes('DOWNTIME') ||
+      upper.includes('DEFECT') ||
+      upper.includes('SCRAP') ||
+      upper.includes('ACCIDENT') ||
+      upper.includes('OUTAGE')
     );
   };
 
@@ -320,11 +340,13 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
 
   // Operational metrics sharing the same physical unit
   const sameUnitOpMetrics = useMemo(() => {
-    if (!selectedOpMetric || !selectedOpMetric.unit) return [];
-    return operationalMetrics.filter(m =>
-      (m.unit || '').toUpperCase() === (selectedOpMetric.unit || '').toUpperCase() &&
+    if (!selectedOpMetric) return [];
+    const targetUnit = (selectedOpMetric.unit || '').trim().toUpperCase();
+    const matches = operationalMetrics.filter(m =>
+      (m.unit || '').trim().toUpperCase() === targetUnit &&
       (m.actual !== null || m.plan !== null)
     );
+    return matches.length > 0 ? matches : [selectedOpMetric];
   }, [selectedOpMetric, operationalMetrics]);
 
   const sameUnitChartData = useMemo(() => {
@@ -346,143 +368,330 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
     }));
   }, [sameUnitOpMetrics, selectedOpMetric]);
 
+  const currentSheetName =
+    consolidatedData.sheetName ||
+    dataset.activeSheetName ||
+    dataset.selectedSheet ||
+    'CONSOLIDATED';
+
+  const sheetMeta = useMemo(() => {
+    return dataset.parsedWorkbook?.sheets.find(
+      s => s.sheetName.toLowerCase() === currentSheetName.toLowerCase()
+    );
+  }, [dataset, currentSheetName]);
+
+  const entityTitle =
+    sheetMeta?.companyName ||
+    sheetMeta?.displayName ||
+    (currentSheetName.toUpperCase().includes('CONSOLIDAT')
+      ? 'VIGOR Group Consolidated Performance'
+      : currentSheetName);
+
+  const isGroupLevel =
+    sheetMeta?.role === 'group' ||
+    currentSheetName.toUpperCase().includes('CONSOLIDAT');
+
+  const rawGrid = useMemo(() => {
+    return getSheetRawPreview(dataset, currentSheetName);
+  }, [dataset, currentSheetName]);
+
+  const filteredRawGrid = useMemo(() => {
+    if (!sourceDataSearch.trim()) return rawGrid;
+    const q = sourceDataSearch.toLowerCase().trim();
+    return rawGrid.filter(row =>
+      row.some(c => c !== null && String(c).toLowerCase().includes(q))
+    );
+  }, [rawGrid, sourceDataSearch]);
+
   return (
     <div className="space-y-6">
-      {/* 1. Header Banner */}
+      {/* 1. Header Banner & Executive Context */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Breadcrumb row */}
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => onSelectSheet?.('CONSOLIDATED')}
+            className="hover:text-slate-900 font-medium transition-colors"
+          >
+            VIGOR Group
+          </button>
+          <ChevronRight className="w-3 h-3 text-slate-400" />
+          {sheetMeta?.sectorName && (
+            <>
+              <span className="text-slate-600">{sheetMeta.sectorName}</span>
+              <ChevronRight className="w-3 h-3 text-slate-400" />
+            </>
+          )}
+          <span className="font-bold text-slate-900">{currentSheetName}</span>
+        </div>
+
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                CONSOLIDATED Source of Truth
+                Sheet: {currentSheetName}
               </span>
+              {sheetMeta?.role === 'company' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                  <Building2 className="w-3 h-3 text-slate-500" />
+                  Operating Entity
+                </span>
+              )}
+              {sheetMeta?.role === 'sector' && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <Factory className="w-3 h-3 text-emerald-600" />
+                  Sector Rollup
+                </span>
+              )}
+              {isGroupLevel && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-sky-50 text-sky-700 border border-sky-200">
+                  <Layers className="w-3 h-3 text-sky-600" />
+                  Consolidated Group P&L
+                </span>
+              )}
               <span className="text-xs text-slate-400">|</span>
-              <span className="text-xs font-medium text-slate-500">{consolidatedData.filename}</span>
+              <span className="text-xs font-medium text-slate-500 truncate max-w-xs">{consolidatedData.filename}</span>
             </div>
+
             <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-              VIGOR Group Consolidated Performance
+              {entityTitle}
             </h1>
-            <p className="text-xs text-slate-500 flex items-center gap-2">
+            <p className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
               <Calendar className="w-3.5 h-3.5 text-slate-400" />
               Reporting Period: <span className="font-semibold text-slate-700">{reportingPeriod}</span>
               <span className="text-slate-300">•</span>
-              <span>Jan–{reportingMonth} Actual Trend Analysis</span>
+              <span>Jan–{reportingMonth} Actual vs Plan Performance Analysis</span>
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Quick Header Switcher Controls */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {onSelectSheet && (
+              <WorkbookSheetSwitcher
+                dataset={dataset}
+                activeSheetName={currentSheetName}
+                onSelectSheet={onSelectSheet}
+                onOpenExplorer={onOpenExplorer}
+              />
+            )}
+
+            {onOpenExplorer && (
+              <button
+                type="button"
+                id="header-workbook-directory-btn"
+                onClick={onOpenExplorer}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition-colors"
+                title="Open Workbook Directory"
+              >
+                <TableProperties className="w-3.5 h-3.5 text-slate-500" />
+                Workbook Directory
+              </button>
+            )}
+
             <button
-              onClick={() => {
-                if (onNavigateToAskAI) {
-                  onNavigateToAskAI('Summarize the executive consolidated performance for August 2026.');
-                } else {
-                  setShowAiNotice(true);
-                }
-              }}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold hover:bg-indigo-100 transition-colors cursor-pointer"
+              type="button"
+              id="header-view-source-data-btn"
+              onClick={() => setActiveTab('data')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-2xs transition-colors ${
+                activeTab === 'data'
+                  ? 'bg-slate-900 text-white border-slate-900'
+                  : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-700'
+              }`}
+              title="Inspect raw worksheet cells and formulas"
             >
-              <Sparkles className="w-4 h-4 text-indigo-600" />
-              Ask AI Executive Summary
+              <FileSpreadsheet className="w-3.5 h-3.5 text-sky-600" />
+              Source Data
             </button>
-          </div>
+
+            </div>
         </div>
 
-        {/* Optional AI Notice if invoked offline */}
-        {showAiNotice && (
-          <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center justify-between">
-            <span>AI analysis temporarily unavailable. Dashboard analytics remain fully available.</span>
-            <button
-              onClick={() => setShowAiNotice(false)}
-              className="text-amber-900 font-bold ml-4 cursor-pointer"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {/* View Controls: Current Month | YTD | Trend */}
+        {/* View Controls: Overview | Financial | Operational | Trends | YTD | Source Data */}
         <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-3">
-          <div className="inline-flex p-1 bg-slate-100 rounded-xl">
+          <div className="inline-flex p-1 bg-slate-100 rounded-xl overflow-x-auto max-w-full">
             <button
-              onClick={() => setActiveTab('current_month')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'current_month'
+              id="dashboard-tab-overview"
+              onClick={() => setActiveTab('overview')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'overview'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Current Month
+              Executive Overview
             </button>
+
             <button
-              onClick={() => setActiveTab('ytd')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'ytd'
+              id="dashboard-tab-financial"
+              onClick={() => setActiveTab('financial')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'financial' || activeTab === 'current_month'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              YTD
+              Financial (Act vs Plan)
             </button>
+
+            {operationalMetrics.length > 0 && (
+              <button
+                id="dashboard-tab-operational"
+                onClick={() => setActiveTab('operational')}
+                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                  activeTab === 'operational'
+                    ? 'bg-white text-slate-900 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Operational ({operationalMetrics.length} KPIs)
+              </button>
+            )}
+
             <button
+              id="dashboard-tab-trend"
               onClick={() => setActiveTab('trend')}
-              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
                 activeTab === 'trend'
                   ? 'bg-white text-slate-900 shadow-2xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Trend
+              Monthly Trends (Jan–Aug)
+            </button>
+
+            <button
+              id="dashboard-tab-ytd"
+              onClick={() => setActiveTab('ytd')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === 'ytd'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              YTD Cumulative
+            </button>
+
+            <button
+              id="dashboard-tab-data"
+              onClick={() => setActiveTab('data')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                activeTab === 'data'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <TableIcon className="w-3.5 h-3.5 text-slate-500" />
+              Source Data
             </button>
           </div>
 
-          <div className="text-xs text-slate-500 font-medium">
-            Active View:{' '}
+          <div className="text-xs text-slate-500 font-medium hidden md:block">
+            Scope:{' '}
             <span className="font-bold text-slate-800">
-              {activeTab === 'current_month' ? `August 2026 Actual vs Plan` : activeTab === 'ytd' ? `Jan–Aug 2026 YTD` : `Jan–Aug 2026 Monthly Trend`}
+              {entityTitle} ({currentSheetName})
             </span>
           </div>
         </div>
       </div>
 
-      {/* 2. Management Executive Insights */}
-      {insights.length > 0 && (
-        <div className="bg-gradient-to-r from-slate-900 to-indigo-950 rounded-2xl p-5 text-white shadow-md">
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-              Executive Highlights — August 2026
-            </h2>
+      {/* Honest Empty State for Sheets Without Valid Analytics */}
+      {financialMetrics.length === 0 && operationalMetrics.length === 0 && activeTab !== 'data' ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-5 max-w-xl mx-auto my-8 shadow-2xs">
+          <div className="w-14 h-14 rounded-2xl bg-slate-100 border border-slate-200 text-slate-600 mx-auto flex items-center justify-center">
+            <TableProperties className="w-7 h-7" />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {insights.map((ins, idx) => (
-              <div
-                key={idx}
-                className="bg-white/10 rounded-xl p-3 backdrop-blur-xs border border-white/10 text-xs text-slate-200 leading-relaxed"
-              >
-                <div className="flex items-start gap-2">
-                  <div
-                    className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
-                      ins.type === 'positive'
-                        ? 'bg-emerald-400'
-                        : ins.type === 'warning'
-                        ? 'bg-rose-400'
-                        : 'bg-amber-400'
-                    }`}
-                  />
-                  <span>{ins.text}</span>
-                </div>
-              </div>
-            ))}
+          <div className="space-y-1.5">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+              Worksheet: {currentSheetName}
+            </span>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">
+              Source Sheet
+            </h2>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              This worksheet has not yet been converted into an analytical dashboard.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab('data')}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>View Source Data</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectSheet?.('CONSOLIDATED')}
+              className="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Back to Consolidated
+            </button>
           </div>
         </div>
-      )}
+      ) : (
+        <>
+          {/* 2. Management Executive Insights */}
+          {insights.length > 0 && activeTab !== 'data' && (
+            <div className="bg-gradient-to-r from-slate-900 to-indigo-950 rounded-2xl p-5 text-white shadow-md">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <h2 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Executive Highlights — {reportingPeriod}
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {insights.map((ins, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white/10 rounded-xl p-3 backdrop-blur-xs border border-white/10 text-xs text-slate-200 leading-relaxed"
+                  >
+                    <div className="flex items-start gap-2">
+                      <div
+                        className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${
+                          ins.type === 'positive'
+                            ? 'bg-emerald-400'
+                            : ins.type === 'warning'
+                            ? 'bg-rose-400'
+                            : 'bg-amber-400'
+                        }`}
+                      />
+                      <span>{ins.text}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
       {/* ========================================================================= */}
-      {/* 3. CURRENT MONTH VIEW                                                     */}
+      {/* FINANCIAL PERFORMANCE (Current-Period: August 2026)                       */}
       {/* ========================================================================= */}
-      {activeTab === 'current_month' && (
+      {(activeTab === 'overview' || activeTab === 'financial' || activeTab === 'current_month') && (
         <div className="space-y-6">
+          {/* Financial Performance Header Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200/80 pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-indigo-600" />
+                  Financial Performance — August 2026
+                </h2>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wide">
+                  Financial Actual vs Plan (MTZS)
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                August 2026 execution against Plan targets. Values in Millions TZS (MTZS). Cost metrics evaluate lower actuals as favorable.
+              </p>
+            </div>
+            <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg w-fit">
+              Period: August 2026
+            </span>
+          </div>
+
           {/* 6 Key Financial KPI Cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {/* Revenue */}
@@ -744,19 +953,28 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
               </table>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* ========================================================================= */}
-          {/* OPERATIONAL PERFORMANCE SECTION (Current-Period Snapshot)                 */}
-          {/* ========================================================================= */}
+      {/* ========================================================================= */}
+      {/* OPERATIONAL PERFORMANCE SECTION (Current-Period Snapshot)                 */}
+      {/* ========================================================================= */}
+      {operationalMetrics.length > 0 && (activeTab === 'overview' || activeTab === 'operational') && (
+        <div className="space-y-6">
           <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xs space-y-5">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-indigo-600" />
-                  Operational Performance — August 2026
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Current-period operational results compared with plan (Physical Units: Patients, Guests, SKU, TON, BAGS, ROLLS, etc.).
+                <div className="flex items-center gap-2 mb-1">
+                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-indigo-600" />
+                    Operational Performance — August 2026 Snapshot
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 uppercase tracking-wide">
+                    Current-Period Snapshot
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Evaluates operational KPIs in the reporting month (August 2026) against Plan targets in authentic physical units (e.g. Patients, Guests, SKU, TON, BAGS, ROLLS). Distinct from multi-month historical trends.
                 </p>
               </div>
 
@@ -1298,19 +1516,24 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
       )}
 
       {/* ========================================================================= */}
-      {/* 5. TREND VIEW (Jan–Aug Only)                                              */}
+      {/* 5. MONTHLY PERFORMANCE TRENDS VIEW (Jan–Aug Multi-Month Time Series)      */}
       {/* ========================================================================= */}
-      {activeTab === 'trend' && (
+      {(activeTab === 'overview' || activeTab === 'trend') && (
         <div className="space-y-6">
           <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xs space-y-5">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-100 pb-4">
               <div>
-                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <LineChartIcon className="w-5 h-5 text-indigo-600" />
-                  Monthly Performance Trends (January – August 2026)
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Actual reported performance through {reportingMonth} 2026. Excludes future placeholder months (Sept–Dec).
+                <div className="flex items-center gap-2 mb-1">
+                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <LineChartIcon className="w-5 h-5 text-purple-600" />
+                    Monthly Performance Trends (January – August 2026)
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 uppercase tracking-wide">
+                    Multi-Month Time-Series (Jan–Aug)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Tracks multi-month performance trajectory over time across the 8 reported months of 2026 (Jan–Aug). Compares Actual monthly results against Plan targets.
                 </p>
               </div>
 
@@ -1470,6 +1693,360 @@ export const ConsolidatedManagementDashboard: React.FC<ConsolidatedManagementDas
                 alternativeMetricLabel="View Revenue Trend"
               />
             </div>
+
+            {/* 8-Month Monthly Trajectory Data Table */}
+            {selectedTrendMetric && (
+              <div className="mt-6 pt-5 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                      <TableIcon className="w-3.5 h-3.5 text-purple-600" />
+                      Monthly Trajectory (Jan – Aug 2026) — {selectedTrendMetric.metricName}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Actual vs Plan breakdown across all 8 reported months of 2026. Values in {selectedTrendMetric.unit || 'Units'}.
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                    {selectedTrendMetric.unit || 'Units'}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3 min-w-[140px]">Series</th>
+                        {availableMonths.map(mo => (
+                          <th
+                            key={mo}
+                            className={`py-2.5 px-2 text-right ${
+                              mo === 'Aug' ? 'bg-indigo-50/70 font-bold text-indigo-900 border-l border-r border-indigo-100' : ''
+                            }`}
+                          >
+                            {mo}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {/* Actual Row */}
+                      <tr>
+                        <td className="py-2.5 px-3 font-semibold text-slate-900 flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-xs bg-indigo-600 inline-block shrink-0" />
+                          Actual
+                        </td>
+                        {availableMonths.map(mo => {
+                          const val = selectedTrendMetric.monthlyValues?.[mo];
+                          const num = normalizeNumericValue(val);
+                          return (
+                            <td
+                              key={mo}
+                              className={`py-2.5 px-2 text-right font-medium text-slate-900 ${
+                                mo === 'Aug' ? 'bg-indigo-50/40 font-bold text-indigo-900 border-l border-r border-indigo-100' : ''
+                              }`}
+                            >
+                              {num !== null ? formatVal(num, selectedTrendMetric.unit) : '—'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+
+                      {/* Plan Row (if available) */}
+                      {hasMonthlyPlan && (
+                        <tr>
+                          <td className="py-2.5 px-3 font-semibold text-slate-600 flex items-center gap-1.5">
+                            <span className="w-2.5 h-2.5 rounded-xs bg-slate-400 inline-block shrink-0" />
+                            Plan Target
+                          </td>
+                          {availableMonths.map(mo => {
+                            const val = selectedTrendMetric.monthlyPlanValues?.[mo];
+                            const num = normalizeNumericValue(val);
+                            return (
+                              <td
+                                key={mo}
+                                className={`py-2.5 px-2 text-right text-slate-600 ${
+                                  mo === 'Aug' ? 'bg-indigo-50/40 font-semibold text-slate-700 border-l border-r border-indigo-100' : ''
+                                }`}
+                              >
+                                {num !== null ? formatVal(num, selectedTrendMetric.unit) : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      )}
+
+                      {/* Variance Row (if Plan available) */}
+                      {hasMonthlyPlan && (
+                        <tr>
+                          <td className="py-2.5 px-3 font-medium text-slate-600">
+                            Variance (Act - Plan)
+                          </td>
+                          {availableMonths.map(mo => {
+                            const actVal = normalizeNumericValue(selectedTrendMetric.monthlyValues?.[mo]);
+                            const planVal = normalizeNumericValue(selectedTrendMetric.monthlyPlanValues?.[mo]);
+                            const v = actVal !== null && planVal !== null ? actVal - planVal : null;
+                            return (
+                              <td
+                                key={mo}
+                                className={`py-2.5 px-2 text-right font-medium ${
+                                  mo === 'Aug' ? 'bg-indigo-50/40 border-l border-r border-indigo-100' : ''
+                                } ${getVarianceClass(v, selectedTrendMetric.metricName)}`}
+                              >
+                                {v !== null ? (v > 0 ? `+${formatVal(v, selectedTrendMetric.unit)}` : formatVal(v, selectedTrendMetric.unit)) : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      )}
+
+                      {/* Achievement Row (if Plan available) */}
+                      {hasMonthlyPlan && (
+                        <tr>
+                          <td className="py-2.5 px-3 font-medium text-slate-600">
+                            Achievement %
+                          </td>
+                          {availableMonths.map(mo => {
+                            const actVal = normalizeNumericValue(selectedTrendMetric.monthlyValues?.[mo]);
+                            const planVal = normalizeNumericValue(selectedTrendMetric.monthlyPlanValues?.[mo]);
+                            const pct = actVal !== null && planVal !== null && planVal !== 0 ? (actVal / planVal) * 100 : null;
+                            return (
+                              <td
+                                key={mo}
+                                className={`py-2.5 px-2 text-right font-bold ${
+                                  mo === 'Aug' ? 'bg-indigo-50/40 border-l border-r border-indigo-100' : ''
+                                } ${getAchievementClass(pct, selectedTrendMetric.metricName)}`}
+                              >
+                                {pct !== null ? `${pct.toFixed(1)}%` : '—'}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+        </>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 6. SOURCE DATA & WORKSHEET PREVIEW TAB                                    */}
+      {/* ========================================================================= */}
+      {activeTab === 'data' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xs space-y-5">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <FileSpreadsheet className="w-5 h-5 text-sky-600" />
+                    Source Worksheet Data: {currentSheetName}
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200 uppercase tracking-wide">
+                    Direct Excel Ingestion
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Inspect raw cells and formulas directly from worksheet "{currentSheetName}" in {consolidatedData.filename}.
+                </p>
+              </div>
+
+              {/* View Switcher: Raw Sheet Grid vs Extracted Metrics */}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setSourceDataView('grid')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      sourceDataView === 'grid'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <TableProperties className="w-3.5 h-3.5 text-sky-600" />
+                    Spreadsheet Grid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSourceDataView('metrics')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      sourceDataView === 'metrics'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
+                    Extracted Metrics ({financialMetrics.length + operationalMetrics.length})
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Sub-view: RAW SPREADSHEET GRID */}
+            {sourceDataView === 'grid' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={sourceDataSearch}
+                      onChange={e => setSourceDataSearch(e.target.value)}
+                      placeholder="Filter worksheet rows by keyword, code, or value..."
+                      className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                  </div>
+                  <span className="text-xs text-slate-400">
+                    Showing {filteredRawGrid.length} of {rawGrid.length} rows
+                  </span>
+                </div>
+
+                {filteredRawGrid.length > 0 ? (
+                  <div className="overflow-x-auto max-h-[550px] border border-slate-200 rounded-xl">
+                    <table className="w-full text-left text-xs border-collapse font-mono">
+                      <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-xs text-slate-700 font-semibold border-b border-slate-200 z-10">
+                        <tr>
+                          <th className="py-2 px-3 text-slate-400 border-r border-slate-200 w-12 text-center select-none">
+                            #
+                          </th>
+                          {filteredRawGrid[0]?.map((_, colIdx) => (
+                            <th
+                              key={colIdx}
+                              className="py-2 px-3 border-r border-slate-200 text-slate-700 whitespace-nowrap"
+                            >
+                              {String.fromCharCode(65 + (colIdx % 26))}
+                              {colIdx >= 26 ? String(Math.floor(colIdx / 26)) : ''}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {filteredRawGrid.map((row, rIdx) => (
+                          <tr key={rIdx} className="hover:bg-sky-50/40 transition-colors">
+                            <td className="py-1.5 px-2 text-slate-400 border-r border-slate-200 text-center select-none bg-slate-50 text-[11px]">
+                              {rIdx + 1}
+                            </td>
+                            {row.map((cell, cIdx) => (
+                              <td
+                                key={cIdx}
+                                className={`py-1.5 px-3 border-r border-slate-100 whitespace-nowrap text-xs ${
+                                  cell === null || cell === ''
+                                    ? 'text-slate-300'
+                                    : typeof cell === 'number'
+                                    ? 'text-right font-semibold text-slate-800'
+                                    : 'text-left text-slate-700'
+                                }`}
+                              >
+                                {cell === null || cell === '' ? '' : String(cell)}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-8 text-center bg-slate-50 rounded-xl border border-slate-200 text-slate-500 text-xs">
+                    No rows match filter "{sourceDataSearch}".
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Sub-view: ALL EXTRACTED METRICS */}
+            {sourceDataView === 'metrics' && (
+              <div className="space-y-4">
+                <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="py-2.5 px-3">Metric Name</th>
+                        <th className="py-2.5 px-2">Type</th>
+                        <th className="py-2.5 px-2">Unit</th>
+                        <th className="py-2.5 px-2 text-right">Aug Actual</th>
+                        <th className="py-2.5 px-2 text-right">Aug Plan</th>
+                        <th className="py-2.5 px-2 text-right">Variance</th>
+                        <th className="py-2.5 px-2 text-right">Achieve %</th>
+                        <th className="py-2.5 px-2 text-right">SPLY</th>
+                        <th className="py-2.5 px-2 text-right">YTD Actual</th>
+                        <th className="py-2.5 px-2 text-right">YTD Plan</th>
+                        <th className="py-2.5 px-2 text-right">YTD Achieve %</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {[...financialMetrics, ...operationalMetrics].map(m => {
+                        return (
+                          <tr key={m.id} className="hover:bg-slate-50/60">
+                            <td className="py-2 px-3 font-semibold text-slate-800">
+                              {m.metricName}
+                            </td>
+                            <td className="py-2 px-2">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                  m.isOperational
+                                    ? 'bg-indigo-50 text-indigo-700'
+                                    : 'bg-emerald-50 text-emerald-700'
+                                }`}
+                              >
+                                {m.isOperational ? 'Operational' : 'Financial'}
+                              </span>
+                            </td>
+                            <td className="py-2 px-2 text-slate-500 font-mono text-[11px]">
+                              {m.unit || '—'}
+                            </td>
+                            <td className="py-2 px-2 text-right font-bold text-slate-900">
+                              {formatVal(m.actual, m.unit)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-600">
+                              {formatVal(m.plan, m.unit)}
+                            </td>
+                            <td
+                              className={`py-2 px-2 text-right font-semibold ${getVarianceClass(
+                                m.variance,
+                                m.metricName
+                              )}`}
+                            >
+                              {m.variance !== null ? formatVal(m.variance, m.unit) : '—'}
+                            </td>
+                            <td
+                              className={`py-2 px-2 text-right font-bold ${getAchievementClass(
+                                m.achievementPct,
+                                m.metricName
+                              )}`}
+                            >
+                              {formatPct(m.achievementPct)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-500">
+                              {formatVal(m.priorYear, m.unit)}
+                            </td>
+                            <td className="py-2 px-2 text-right font-bold text-slate-900">
+                              {formatVal(m.ytdActual, m.unit)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-slate-600">
+                              {formatVal(m.ytdPlan, m.unit)}
+                            </td>
+                            <td
+                              className={`py-2 px-2 text-right font-bold ${getAchievementClass(
+                                m.ytdAchievementPct,
+                                m.metricName
+                              )}`}
+                            >
+                              {formatPct(m.ytdAchievementPct)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

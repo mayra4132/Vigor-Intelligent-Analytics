@@ -23,6 +23,7 @@ import {
   MONTH_KEYS,
   NormalizedMonthHeader
 } from './monthNormalizer';
+import { ALL_VIGOR_COMPANIES, VIGOR_SECTORS } from '../data/groupStructure';
 
 export { normalizeMonthHeader, normalizeNumericValue, MONTH_KEYS };
 export type { NormalizedMonthHeader };
@@ -123,6 +124,28 @@ export function parseConsolidatedWorksheet(
   const dataQualityIssues: string[] = [];
   const rep = detectReportingMonth(filename);
   const activeMonthNum = rep.monthNum; // 8 for Aug
+
+  // Map sheet to canonical business entity if recognized
+  const cleanName = sheetName.trim().toUpperCase();
+  const compMeta = ALL_VIGOR_COMPANIES.find(
+    c =>
+      c.code.toUpperCase() === cleanName ||
+      c.name.toUpperCase() === cleanName ||
+      c.aliases?.some(a => a.toUpperCase() === cleanName)
+  );
+  const sectorMeta = VIGOR_SECTORS.find(
+    s =>
+      s.code.toUpperCase() === cleanName ||
+      s.name.toUpperCase() === cleanName ||
+      s.aliases?.some(a => a.toUpperCase() === cleanName)
+  );
+  const targetEntityName = compMeta
+    ? compMeta.name
+    : sectorMeta
+    ? `${sectorMeta.name} (Sector Summary)`
+    : cleanName === 'CONSOLIDATED'
+    ? 'VIGOR Group Consolidated'
+    : sheetName;
 
   // Convert worksheet to dense 2D grid
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:AJ150');
@@ -548,10 +571,10 @@ export function parseConsolidatedWorksheet(
       }
 
       const metric: NormalizedMetric = {
-        id: `cons_${sectionType}_${r}`,
-        companyId: null,
-        companyName: 'VIGOR Group Consolidated',
-        sectorId: null,
+        id: `${sheetName}_${sectionType}_${r}`,
+        companyId: compMeta?.id || null,
+        companyName: targetEntityName,
+        sectorId: compMeta?.sectorId || sectorMeta?.id || null,
         section: sectionType,
         metricName: itemNameRaw,
         unit,
@@ -592,12 +615,12 @@ export function parseConsolidatedWorksheet(
 
   if (opHeaderRow !== -1) {
     const opColMap = buildColumnMap(opHeaderRow);
-    operationalMetrics = extractSectionRows('CONSOLIDATED', 'operational', opStartRow, opEndRow, opColMap);
+    operationalMetrics = extractSectionRows(sheetName, 'operational', opStartRow, opEndRow, opColMap);
   }
 
   if (finHeaderRow !== -1) {
     const finColMap = buildColumnMap(finHeaderRow);
-    financialMetrics = extractSectionRows('CONSOLIDATED', 'financial', finStartRow, finEndRow, finColMap);
+    financialMetrics = extractSectionRows(sheetName, 'financial', finStartRow, finEndRow, finColMap);
   } else if (operationalMetrics.length > 0) {
     // If financial section wasn't separated by a header, see if financial rows are mixed in
     const finKeywords = ['REVENUE', 'TURNOVER', 'GROSS PROFIT', 'OPEX', 'EBITDA', 'NET PROFIT'];
@@ -648,12 +671,12 @@ export function parseConsolidatedWorksheet(
       if (revMetric.achievementPct >= 100) {
         insights.push({
           type: 'positive',
-          text: `Consolidated August revenue of ${formatMtzs(revMetric.actual)} surpassed plan at ${revMetric.achievementPct.toFixed(1)}% achievement.`
+          text: `${targetEntityName} ${rep.monthName} revenue of ${formatMtzs(revMetric.actual)} surpassed plan at ${revMetric.achievementPct.toFixed(1)}% achievement.`
         });
       } else {
         insights.push({
           type: 'warning',
-          text: `Consolidated August revenue reached ${formatMtzs(revMetric.actual)}, tracking at ${revMetric.achievementPct.toFixed(1)}% of budget.`
+          text: `${targetEntityName} ${rep.monthName} revenue reached ${formatMtzs(revMetric.actual)}, tracking at ${revMetric.achievementPct.toFixed(1)}% of budget.`
         });
       }
     }
@@ -664,14 +687,14 @@ export function parseConsolidatedWorksheet(
     if (ebitdaMetric.actual !== null && ebitdaMetric.actual > 0) {
       insights.push({
         type: 'positive',
-        text: `Operating EBITDA closed positive at ${formatMtzs(ebitdaMetric.actual)} for August${
+        text: `Operating EBITDA closed positive at ${formatMtzs(ebitdaMetric.actual)} for ${rep.monthName}${
           ebitdaMetric.plan ? ` against a plan of ${formatMtzs(ebitdaMetric.plan)}` : ''
         }.`
       });
     } else if (ebitdaMetric.actual !== null && ebitdaMetric.actual < 0) {
       insights.push({
         type: 'warning',
-        text: `Consolidated EBITDA was negative at ${formatMtzs(ebitdaMetric.actual)} for August, requiring operational expense restraint.`
+        text: `${targetEntityName} EBITDA was negative at ${formatMtzs(ebitdaMetric.actual)} for ${rep.monthName}, requiring operational expense restraint.`
       });
     }
   }
@@ -687,7 +710,7 @@ export function parseConsolidatedWorksheet(
     } else if (npMetric.actual !== null) {
       insights.push({
         type: npMetric.actual >= 0 ? 'positive' : 'warning',
-        text: `Consolidated Net Profit for August concluded at ${formatMtzs(npMetric.actual)}.`
+        text: `Consolidated Net Profit for ${rep.monthName} concluded at ${formatMtzs(npMetric.actual)}.`
       });
     }
   }
